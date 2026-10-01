@@ -593,9 +593,7 @@ class RadarApp:
         self._message_count += 1
         noun = "mensaje" if self._message_count == 1 else "mensajes"
         self.count_label.configure(text=f"{self._message_count} {noun}")
-        visible = payload.replace("\r", "").replace("\n", "\\n")
-        if len(visible) > 500:
-            visible = visible[:500] + "…"
+        visible = payload.replace("\r\n", "\n").replace("\r", "\n")
         stamp = self._now()
         if matched:
             line = f"{stamp}   {topic}   {visible}   → {matched.name}"
