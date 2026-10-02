@@ -14,7 +14,6 @@ import paho.mqtt.client as mqtt
 
 from radar_mqtt.storage import (
     Broker,
-    SavedPayload,
     Settings,
     Topic,
     enabled_topic_names,
@@ -123,6 +122,8 @@ class RadarApp:
         self._message_count = 0
         self._draft_id = ""
         self._copy_buttons: list[tk.Button] = []
+        self._publish_broker_id = ""
+        self._publishing = False
 
         self.root = tk.Tk()
         self.root.title("Radar MQTT")
@@ -167,7 +168,7 @@ class RadarApp:
         body.rowconfigure(0, weight=1)
 
         self._build_broker(body)
-        self._build_payloads(body)
+        self._build_publish(body)
         self._build_listen_bar()
         self._build_log()
 
@@ -256,54 +257,60 @@ class RadarApp:
         self.delete_broker_button.pack(side="left", padx=8)
         ttk.Label(actions, text="1883 sin TLS, 8883 con TLS", style="Muted.TLabel").pack(side="right")
 
-    def _build_payloads(self, parent: tk.Frame) -> None:
-        frame = ttk.LabelFrame(parent, text="Payloads guardados", padding=12)
+    def _build_publish(self, parent: tk.Frame) -> None:
+        frame = ttk.LabelFrame(parent, text="Publicar", padding=12)
         frame.grid(row=0, column=1, sticky="nsew")
-        frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(1, weight=1)
+        frame.rowconfigure(4, weight=1)
 
-        self.payload_list = tk.Listbox(
+        ttk.Label(frame, text="Broker").grid(row=0, column=0, sticky="w", pady=4)
+        self.publish_broker_combo = ttk.Combobox(frame, state="readonly")
+        self.publish_broker_combo.grid(row=0, column=1, sticky="ew", pady=4)
+        self.publish_broker_combo.bind("<<ComboboxSelected>>", self._on_publish_broker)
+
+        ttk.Label(frame, text="Tópico").grid(row=1, column=0, sticky="w", pady=4)
+        self.publish_topic_var = tk.StringVar()
+        self.publish_topic_entry = ttk.Entry(frame, textvariable=self.publish_topic_var)
+        self.publish_topic_entry.grid(row=1, column=1, sticky="ew", pady=4)
+
+        ttk.Label(frame, text="QoS").grid(row=2, column=0, sticky="w", pady=4)
+        qos_row = tk.Frame(frame, bg=BG)
+        qos_row.grid(row=2, column=1, sticky="ew", pady=4)
+        self.publish_qos_var = tk.StringVar(value="0")
+        self.publish_qos_entry = ttk.Spinbox(qos_row, from_=0, to=2, textvariable=self.publish_qos_var, width=4)
+        self.publish_qos_entry.pack(side="left")
+        self.publish_retain_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(qos_row, text="Retenido", variable=self.publish_retain_var).pack(side="left", padx=(16, 0))
+
+        ttk.Label(frame, text="Payload").grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 2))
+        self.publish_payload = tk.Text(
             frame,
             height=8,
-            exportselection=False,
-            relief="flat",
-            font=("Segoe UI", 10),
+            wrap="word",
+            font=("Consolas", 10),
             bg="white",
             fg=INK,
-            selectbackground=BROWN,
-            selectforeground="white",
+            relief="flat",
+            padx=6,
+            pady=6,
         )
-        self.payload_list.grid(row=0, column=0, sticky="nsew")
-        self.payload_list.bind("<<ListboxSelect>>", self._on_payload_selected)
+        self.publish_payload.grid(row=4, column=0, columnspan=2, sticky="nsew")
 
-        self.payload_name = tk.StringVar()
-        self.payload_body = tk.StringVar()
-        ttk.Label(frame, text="Nombre").grid(row=1, column=0, sticky="w", pady=(8, 0))
-        self.payload_name_entry = ttk.Entry(frame, textvariable=self.payload_name)
-        self.payload_name_entry.grid(row=2, column=0, sticky="ew", pady=2)
-        ttk.Label(frame, text="Contenido").grid(row=3, column=0, sticky="w")
-        self.payload_body_entry = ttk.Entry(frame, textvariable=self.payload_body)
-        self.payload_body_entry.grid(row=4, column=0, sticky="ew", pady=2)
-        self.payload_body_entry.bind("<Return>", lambda _event: self.add_payload())
-
-        actions = tk.Frame(frame, bg=BG)
-        actions.grid(row=5, column=0, sticky="ew", pady=(8, 0))
-        ttk.Button(actions, text="Agregar", command=self.add_payload).pack(side="left")
-        ttk.Button(actions, text="Eliminar", command=self.delete_payload).pack(side="left", padx=8)
-
-        self.only_var = tk.BooleanVar(value=self.settings.only_saved_payloads)
-        ttk.Checkbutton(
+        self.publish_button = tk.Button(
             frame,
-            text="Mostrar solo estos payloads",
-            variable=self.only_var,
-            command=self._save_filter_flag,
-        ).grid(row=6, column=0, sticky="w", pady=(10, 0))
-        ttk.Label(
-            frame,
-            text="Si llega un mensaje igual, se marca con el nombre.",
-            style="Muted.TLabel",
-            wraplength=280,
-        ).grid(row=7, column=0, sticky="w", pady=(6, 0))
+            text="Publicar",
+            command=self.publish_message,
+            bg=BROWN,
+            fg="white",
+            activebackground=BROWN_DARK,
+            activeforeground="white",
+            font=("Segoe UI", 11, "bold"),
+            relief="flat",
+            padx=12,
+            pady=6,
+            cursor="hand2",
+        )
+        self.publish_button.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(10, 0))
 
     def _build_listen_bar(self) -> None:
         bar = tk.Frame(self.root, bg=BG)
@@ -371,8 +378,8 @@ class RadarApp:
         self.log.tag_configure("json_punct", foreground=INK)
 
     def _load_initial(self) -> None:
+        self._publish_broker_id = self.settings.selected_broker_id
         self._refresh_brokers()
-        self._refresh_payloads()
         selected = self._broker_by_id(self.settings.selected_broker_id)
         if selected:
             self._select_broker(selected)
@@ -398,11 +405,81 @@ class RadarApp:
             self.broker_combo.current(self.settings.brokers.index(current))
         elif labels:
             self.broker_combo.current(0)
+        self._refresh_publish_brokers()
 
-    def _refresh_payloads(self) -> None:
-        self.payload_list.delete(0, "end")
-        for item in self.settings.payloads:
-            self.payload_list.insert("end", f"{item.name}   ·   {item.body}")
+    def _refresh_publish_brokers(self) -> None:
+        labels = [self._broker_label(broker) for broker in self.settings.brokers]
+        self.publish_broker_combo.configure(values=labels)
+        if not self.settings.brokers:
+            self.publish_broker_combo.set("")
+            self._publish_broker_id = ""
+            return
+        selected = self._broker_by_id(self._publish_broker_id)
+        if selected is None:
+            selected = self.settings.brokers[0]
+            self._publish_broker_id = selected.id
+        self.publish_broker_combo.current(self.settings.brokers.index(selected))
+
+    def _on_publish_broker(self, _event: object) -> None:
+        index = self.publish_broker_combo.current()
+        if index < 0 or index >= len(self.settings.brokers):
+            return
+        self._publish_broker_id = self.settings.brokers[index].id
+
+    def _read_publish(self) -> tuple[Broker, str, str, int, bool]:
+        broker = self._broker_by_id(self._publish_broker_id)
+        if broker is None:
+            raise ValueError("Elegí un broker guardado.")
+        topic = self.publish_topic_var.get().strip()
+        if not topic:
+            raise ValueError("Escribí el tópico.")
+        try:
+            qos = int(self.publish_qos_var.get().strip())
+        except ValueError:
+            raise ValueError("El QoS tiene que ser 0, 1 o 2.") from None
+        if qos not in (0, 1, 2):
+            raise ValueError("El QoS tiene que ser 0, 1 o 2.")
+        payload = self.publish_payload.get("1.0", "end-1c")
+        return broker, topic, payload, qos, bool(self.publish_retain_var.get())
+
+    def publish_message(self) -> None:
+        if self._publishing:
+            return
+        try:
+            broker, topic, payload, qos, retain = self._read_publish()
+        except ValueError as error:
+            messagebox.showwarning("Radar MQTT", str(error))
+            return
+        self._publishing = True
+        self.publish_button.configure(state="disabled", text="Publicando…")
+        threading.Thread(
+            target=self._publish,
+            args=(broker, topic, payload, qos, retain),
+            daemon=True,
+        ).start()
+
+    def _publish(self, broker: Broker, topic: str, payload: str, qos: int, retain: bool) -> None:
+        client_id = broker.client_id.strip() or "radar"
+        client = self._build_client(broker, client_id=f"{client_id}-pub-{uuid.uuid4().hex[:6]}", listen=False)
+        try:
+            client.connect(broker.host, broker.port, keepalive=30)
+            client.loop_start()
+            info = client.publish(topic, payload.encode("utf-8"), qos=qos, retain=retain)
+            info.wait_for_publish(timeout=10)
+            if not info.is_published():
+                self.events.put(("publish_failed", "El broker no confirmó la publicación."))
+                return
+            self.events.put(("published", broker.name, topic, retain))
+        except Exception as error:
+            detail = str(error).strip() or error.__class__.__name__
+            self.events.put(("publish_failed", detail))
+        finally:
+            try:
+                client.loop_stop()
+                client.disconnect()
+            except Exception:
+                pass
+            self.events.put(("publish_done",))
 
     def _fit_topics(self, _event: object = None) -> None:
         self.topics_canvas.configure(scrollregion=self.topics_canvas.bbox("all"))
@@ -593,56 +670,6 @@ class RadarApp:
         else:
             self.new_broker()
 
-    def _on_payload_selected(self, _event: object) -> None:
-        index = self._selected_payload_index()
-        if index is None:
-            return
-        item = self.settings.payloads[index]
-        self.payload_name.set(item.name)
-        self.payload_body.set(item.body)
-
-    def _selected_payload_index(self) -> int | None:
-        selection = self.payload_list.curselection()
-        if not selection:
-            return None
-        return int(selection[0])
-
-    def add_payload(self) -> None:
-        body = self.payload_body.get().strip()
-        if not body:
-            messagebox.showwarning("Radar MQTT", "Escribí el contenido del payload.")
-            return
-        name = self.payload_name.get().strip() or body
-        for item in self.settings.payloads:
-            if item.body.strip() == body:
-                item.name = name
-                break
-        else:
-            self.settings.payloads.append(SavedPayload(id=str(uuid.uuid4()), name=name, body=body))
-        save_settings(self.settings)
-        self._refresh_payloads()
-        self.payload_name.set("")
-        self.payload_body.set("")
-        self._notice("Payload guardado")
-
-    def delete_payload(self) -> None:
-        index = self._selected_payload_index()
-        if index is None:
-            messagebox.showwarning("Radar MQTT", "Elegí un payload de la lista.")
-            return
-        item = self.settings.payloads[index]
-        if not messagebox.askyesno("Radar MQTT", f"¿Eliminar el payload «{item.name}»?"):
-            return
-        del self.settings.payloads[index]
-        save_settings(self.settings)
-        self._refresh_payloads()
-        self.payload_name.set("")
-        self.payload_body.set("")
-
-    def _save_filter_flag(self) -> None:
-        self.settings.only_saved_payloads = bool(self.only_var.get())
-        save_settings(self.settings)
-
     def toggle_listen(self) -> None:
         if self.listening:
             self.stop_listen()
@@ -689,22 +716,23 @@ class RadarApp:
             detail = str(error).strip() or error.__class__.__name__
             self.events.put(("failed", detail))
 
-    def _build_client(self, broker: Broker) -> mqtt.Client:
-        client_id = broker.client_id.strip() or f"radar-{uuid.uuid4().hex[:8]}"
+    def _build_client(self, broker: Broker, *, client_id: str | None = None, listen: bool = True) -> mqtt.Client:
+        chosen = client_id or broker.client_id.strip() or f"radar-{uuid.uuid4().hex[:8]}"
         client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
-            client_id=client_id,
+            client_id=chosen,
             protocol=mqtt.MQTTv311,
-            reconnect_on_failure=True,
+            reconnect_on_failure=listen,
         )
         client.reconnect_delay_set(1, 20)
         if broker.username:
             client.username_pw_set(broker.username, broker.password)
         if broker.tls:
             client.tls_set()
-        client.on_connect = self._on_connect
-        client.on_message = self._on_message
-        client.on_disconnect = self._on_disconnect
+        if listen:
+            client.on_connect = self._on_connect
+            client.on_message = self._on_message
+            client.on_disconnect = self._on_disconnect
         return client
 
     def _on_connect(self, client: mqtt.Client, _userdata: object, _flags: object, reason_code: object, _properties: object) -> None:
@@ -784,11 +812,17 @@ class RadarApp:
             self._set_listening_ui(False)
             self._set_status("Detenido", ERROR)
             self._log(f"No se pudo conectar: {event[1]}", "error")
+        elif kind == "published":
+            retained = " retenido" if event[3] else ""
+            self._log(f"Publicado{retained} en {event[2]}   ·   {event[1]}", "info")
+        elif kind == "publish_failed":
+            self._log(f"No se pudo publicar: {event[1]}", "error")
+        elif kind == "publish_done":
+            self._publishing = False
+            self.publish_button.configure(state="normal", text="Publicar")
 
     def _show_message(self, topic: str, payload: str) -> None:
         matched = match_payload(payload, self.settings.payloads)
-        if self.only_var.get() and matched is None:
-            return
         self._message_count += 1
         noun = "mensaje" if self._message_count == 1 else "mensajes"
         self.count_label.configure(text=f"{self._message_count} {noun}")
