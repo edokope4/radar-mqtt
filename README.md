@@ -4,6 +4,8 @@ Cliente de escritorio para suscribirse a un broker MQTT y reconocer payloads gua
 
 La interfaz está hecha con Tkinter y la conexión usa [Eclipse Paho](https://eclipse.dev/paho/) (`paho-mqtt`).
 
+Este proyecto ha sido desarrollado con la ayuda de [Cursor](https://cursor.com).
+
 ## Requisitos
 
 - Python 3 con Tkinter
