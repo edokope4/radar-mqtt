@@ -120,6 +120,7 @@ class RadarApp:
         self._active_qos = 0
         self._message_count = 0
         self._draft_id = ""
+        self._copy_buttons: list[tk.Button] = []
 
         self.root = tk.Tk()
         self.root.title("Radar MQTT")
@@ -686,10 +687,8 @@ class RadarApp:
         if matched:
             header += f"   → {matched.name}"
         formatted = pretty_json(visible)
-        if formatted is None:
-            self._log(f"{header}   {visible}", "match" if matched else "msg")
-            return
-        self._log_json(header, formatted, "match" if matched else "msg")
+        shown = formatted if formatted is not None else visible
+        self._log_payload(header, shown, formatted is not None, "match" if matched else "msg")
 
     def _set_listening_ui(self, listening: bool) -> None:
         if listening:
@@ -727,18 +726,55 @@ class RadarApp:
         self.log.tag_add(tag, start, "end-1c")
         self._close_log()
 
-    def _log_json(self, header: str, body: str, header_tag: str) -> None:
+    def _log_payload(self, header: str, body: str, colored: bool, header_tag: str) -> None:
         self._open_log()
         start = self.log.index("end-1c")
         self.log.insert("end", header + "   ")
         self.log.tag_add(header_tag, start, "end-1c")
-        for tag, chunk in json_tokens(body):
-            if tag:
-                self.log.insert("end", chunk, tag)
-            else:
-                self.log.insert("end", chunk)
+        if colored:
+            for tag, chunk in json_tokens(body):
+                if tag:
+                    self.log.insert("end", chunk, tag)
+                else:
+                    self.log.insert("end", chunk)
+        else:
+            start = self.log.index("end-1c")
+            self.log.insert("end", body)
+            self.log.tag_add(header_tag, start, "end-1c")
+        self.log.insert("end", " ")
+        self._insert_copy_button(body)
         self.log.insert("end", "\n")
         self._close_log()
+
+    def _insert_copy_button(self, text: str) -> None:
+        button = tk.Button(
+            self.log,
+            text="Copiar",
+            font=("Segoe UI", 8),
+            fg=BROWN,
+            bg="white",
+            activeforeground=BROWN_DARK,
+            activebackground="#EFEAE4",
+            relief="flat",
+            bd=1,
+            padx=6,
+            pady=0,
+            cursor="hand2",
+        )
+        button.configure(command=lambda payload=text, widget=button: self._copy_payload(payload, widget))
+        self._copy_buttons.append(button)
+        self.log.window_create("end", window=button)
+
+    def _copy_payload(self, text: str, button: tk.Button) -> None:
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        button.configure(text="Listo")
+
+        def restore() -> None:
+            if button.winfo_exists():
+                button.configure(text="Copiar")
+
+        self.root.after(900, restore)
 
     def _open_log(self) -> None:
         self.log.configure(state="normal")
@@ -748,6 +784,7 @@ class RadarApp:
         while line_count > 1000:
             self.log.delete("1.0", "2.0")
             line_count -= 1
+        self._prune_copy_buttons()
         self.log.see("end")
 
     def _guard_log(self, event: tk.Event) -> str | None:
@@ -790,8 +827,12 @@ class RadarApp:
         self._log_menu.tk_popup(event.x_root, event.y_root)
         return "break"
 
+    def _prune_copy_buttons(self) -> None:
+        self._copy_buttons = [button for button in self._copy_buttons if button.winfo_exists()]
+
     def clear_log(self) -> None:
         self.log.delete("1.0", "end")
+        self._prune_copy_buttons()
         self._message_count = 0
         self.count_label.configure(text="0 mensajes")
 
