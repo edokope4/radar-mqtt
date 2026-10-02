@@ -310,19 +310,26 @@ class RadarApp:
         self.log = tk.Text(
             frame,
             height=12,
-            wrap="none",
-            state="disabled",
+            wrap="char",
             font=("Consolas", 10),
             bg="white",
             fg=INK,
             relief="flat",
             padx=8,
             pady=8,
+            cursor="xterm",
         )
         self.log.grid(row=1, column=0, sticky="nsew")
-        scroll_x = ttk.Scrollbar(frame, orient="horizontal", command=self.log.xview)
-        scroll_x.grid(row=2, column=0, sticky="ew")
-        self.log.configure(xscrollcommand=scroll_x.set)
+        scroll_y = ttk.Scrollbar(frame, orient="vertical", command=self.log.yview)
+        scroll_y.grid(row=1, column=1, sticky="ns")
+        self.log.configure(yscrollcommand=scroll_y.set)
+        self.log.bind("<Key>", self._guard_log)
+        self.log.bind("<Control-a>", self._select_all_log)
+        self.log.bind("<Control-A>", self._select_all_log)
+        self.log.bind("<Button-3>", self._show_log_menu)
+        self._log_menu = tk.Menu(self.log, tearoff=0)
+        self._log_menu.add_command(label="Copiar", command=self._copy_log)
+        self._log_menu.add_command(label="Seleccionar todo", command=self._select_all_log)
         self.log.tag_configure("match", foreground=OK, font=("Consolas", 10, "bold"))
         self.log.tag_configure("info", foreground=BROWN)
         self.log.tag_configure("error", foreground=ERROR)
@@ -741,13 +748,50 @@ class RadarApp:
         while line_count > 1000:
             self.log.delete("1.0", "2.0")
             line_count -= 1
-        self.log.configure(state="disabled")
         self.log.see("end")
 
+    def _guard_log(self, event: tk.Event) -> str | None:
+        control = bool(event.state & 0x4)
+        key = event.keysym.lower()
+        if control and key in {"c", "insert", "a"}:
+            return None
+        if key in {
+            "Left",
+            "Right",
+            "Up",
+            "Down",
+            "Home",
+            "End",
+            "Prior",
+            "Next",
+            "Shift_L",
+            "Shift_R",
+            "Control_L",
+            "Control_R",
+        }:
+            return None
+        return "break"
+
+    def _copy_log(self) -> None:
+        try:
+            text = self.log.get("sel.first", "sel.last")
+        except tk.TclError:
+            text = self.log.get("1.0", "end-1c")
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+
+    def _select_all_log(self, _event: object = None) -> str:
+        self.log.tag_add("sel", "1.0", "end-1c")
+        self.log.mark_set("insert", "end-1c")
+        self.log.see("insert")
+        return "break"
+
+    def _show_log_menu(self, event: tk.Event) -> str:
+        self._log_menu.tk_popup(event.x_root, event.y_root)
+        return "break"
+
     def clear_log(self) -> None:
-        self.log.configure(state="normal")
         self.log.delete("1.0", "end")
-        self.log.configure(state="disabled")
         self._message_count = 0
         self.count_label.configure(text="0 mensajes")
 
