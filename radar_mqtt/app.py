@@ -7,7 +7,7 @@ import queue
 import threading
 import uuid
 from datetime import datetime
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 import tkinter as tk
 
 import paho.mqtt.client as mqtt
@@ -20,6 +20,8 @@ from radar_mqtt.storage import (
     load_settings,
     match_payload,
     save_settings,
+    settings_document,
+    settings_from_document,
 )
 
 BG = "#F6F3EF"
@@ -256,6 +258,11 @@ class RadarApp:
         self.delete_broker_button = ttk.Button(actions, text="Eliminar", command=self.delete_broker)
         self.delete_broker_button.pack(side="left", padx=8)
         ttk.Label(actions, text="1883 sin TLS, 8883 con TLS", style="Muted.TLabel").pack(side="right")
+
+        files = tk.Frame(frame, bg=BG)
+        files.grid(row=11, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        ttk.Button(files, text="Exportar", command=self.export_settings).pack(side="left")
+        ttk.Button(files, text="Importar", command=self.import_settings).pack(side="left", padx=8)
 
     def _build_publish(self, parent: tk.Frame) -> None:
         frame = ttk.LabelFrame(parent, text="Publicar", padding=12)
@@ -643,6 +650,58 @@ class RadarApp:
         self.settings.selected_broker_id = broker.id
         save_settings(self.settings)
         self._refresh_brokers()
+
+    def export_settings(self) -> None:
+        try:
+            broker = self.read_form()
+        except ValueError:
+            broker = None
+        if broker is not None:
+            self._store_broker(broker)
+        path = filedialog.asksaveasfilename(
+            title="Exportar configuración",
+            defaultextension=".json",
+            filetypes=[("JSON", "*.json")],
+            initialfile="radar-mqtt.json",
+        )
+        if not path:
+            return
+        document = json.dumps(settings_document(self.settings), ensure_ascii=False, indent=2)
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(document + "\n")
+        except OSError as error:
+            messagebox.showerror("Radar MQTT", f"No se pudo guardar el archivo.\n{error}")
+            return
+        self._notice("Configuración exportada")
+
+    def import_settings(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Importar configuración",
+            filetypes=[("JSON", "*.json")],
+        )
+        if not path:
+            return
+        if not messagebox.askyesno("Radar MQTT", "Esto reemplaza los brokers guardados. ¿Continuar?"):
+            return
+        try:
+            with open(path, encoding="utf-8") as handle:
+                raw = json.load(handle)
+            settings = settings_from_document(raw)
+        except (OSError, json.JSONDecodeError, ValueError) as error:
+            detail = str(error).strip() or "El archivo no tiene una configuración válida."
+            messagebox.showerror("Radar MQTT", detail)
+            return
+        if self.listening:
+            self.stop_listen()
+        self.settings = settings
+        save_settings(self.settings)
+        self._publish_broker_id = settings.selected_broker_id
+        self._refresh_brokers()
+        selected = self._broker_by_id(settings.selected_broker_id)
+        if selected is not None:
+            self._select_broker(selected)
+        self._notice("Configuración importada")
 
     def save_broker(self) -> None:
         try:

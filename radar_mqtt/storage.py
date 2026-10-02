@@ -116,21 +116,35 @@ def _payload_from_dict(raw: dict) -> SavedPayload:
     return SavedPayload(id=str(raw.get("id") or uuid.uuid4()), name=name, body=body)
 
 
-def load_settings() -> Settings:
-    path = app_dir() / "config.json"
-    if not path.exists():
-        settings = default_settings()
-        save_settings(settings)
-        return settings
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return default_settings()
+def settings_document(settings: Settings) -> dict:
+    return {
+        "brokers": [asdict(broker) for broker in settings.brokers],
+        "payloads": [asdict(item) for item in settings.payloads],
+        "selected_broker_id": settings.selected_broker_id,
+        "only_saved_payloads": settings.only_saved_payloads,
+    }
 
-    brokers = [_broker_from_dict(item) for item in raw.get("brokers", []) if isinstance(item, dict)]
+
+def settings_from_document(raw: object) -> Settings:
+    if not isinstance(raw, dict):
+        raise ValueError("El archivo no tiene una configuración válida.")
+    brokers_raw = raw.get("brokers")
+    if not isinstance(brokers_raw, list) or not brokers_raw:
+        raise ValueError("El archivo no incluye brokers.")
+    brokers: list[Broker] = []
+    for item in brokers_raw:
+        if not isinstance(item, dict):
+            raise ValueError("El archivo no tiene una configuración válida.")
+        broker = _broker_from_dict(item)
+        if not broker.host:
+            raise ValueError("Un broker del archivo no tiene host.")
+        brokers.append(broker)
+    payloads_raw = raw.get("payloads", [])
+    if not isinstance(payloads_raw, list):
+        raise ValueError("El archivo no tiene una configuración válida.")
     payloads = [
         _payload_from_dict(item)
-        for item in raw.get("payloads", [])
+        for item in payloads_raw
         if isinstance(item, dict) and str(item.get("body") or "").strip()
     ]
     settings = Settings(
@@ -140,22 +154,32 @@ def load_settings() -> Settings:
         only_saved_payloads=bool(raw.get("only_saved_payloads")),
     )
     if settings.selected_broker_id not in {broker.id for broker in settings.brokers}:
-        settings.selected_broker_id = settings.brokers[0].id if settings.brokers else ""
+        settings.selected_broker_id = settings.brokers[0].id
     return settings
+
+
+def load_settings() -> Settings:
+    path = app_dir() / "config.json"
+    if not path.exists():
+        settings = default_settings()
+        save_settings(settings)
+        return settings
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        return settings_from_document(raw)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return default_settings()
 
 
 def save_settings(settings: Settings) -> None:
     folder = app_dir()
     folder.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "brokers": [asdict(broker) for broker in settings.brokers],
-        "payloads": [asdict(item) for item in settings.payloads],
-        "selected_broker_id": settings.selected_broker_id,
-        "only_saved_payloads": settings.only_saved_payloads,
-    }
     target = folder / "config.json"
     temporary = folder / "config.json.tmp"
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.write_text(
+        json.dumps(settings_document(settings), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     temporary.replace(target)
 
 
