@@ -44,7 +44,7 @@ def pretty_json(text: str) -> str | None:
         value = json.loads(stripped)
     except json.JSONDecodeError:
         return None
-    return json.dumps(value, indent=2, ensure_ascii=False)
+    return json.dumps(value, ensure_ascii=False, separators=(", ", ": "))
 
 
 def json_tokens(text: str) -> list[tuple[str, str]]:
@@ -310,7 +310,7 @@ class RadarApp:
         self.log = tk.Text(
             frame,
             height=12,
-            wrap="word",
+            wrap="none",
             state="disabled",
             font=("Consolas", 10),
             bg="white",
@@ -320,6 +320,9 @@ class RadarApp:
             pady=8,
         )
         self.log.grid(row=1, column=0, sticky="nsew")
+        scroll_x = ttk.Scrollbar(frame, orient="horizontal", command=self.log.xview)
+        scroll_x.grid(row=2, column=0, sticky="ew")
+        self.log.configure(xscrollcommand=scroll_x.set)
         self.log.tag_configure("match", foreground=OK, font=("Consolas", 10, "bold"))
         self.log.tag_configure("info", foreground=BROWN)
         self.log.tag_configure("error", foreground=ERROR)
@@ -720,7 +723,7 @@ class RadarApp:
     def _log_json(self, header: str, body: str, header_tag: str) -> None:
         self._open_log()
         start = self.log.index("end-1c")
-        self.log.insert("end", header + "\n")
+        self.log.insert("end", header + "   ")
         self.log.tag_add(header_tag, start, "end-1c")
         for tag, chunk in json_tokens(body):
             if tag:
