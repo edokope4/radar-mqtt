@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import json
 import os
 import queue
 import threading
@@ -28,6 +29,76 @@ BROWN_DARK = "#5C3A2E"
 OK = "#2E7D4F"
 WARN = "#C47A3A"
 ERROR = "#A33B32"
+JSON_KEY = "#6F4E37"
+JSON_STR = "#1B7A4E"
+JSON_NUM = "#B86E2A"
+JSON_BOOL = "#3E6B9A"
+JSON_NULL = "#8A7568"
+
+
+def pretty_json(text: str) -> str | None:
+    stripped = text.strip()
+    if not stripped or stripped[0] not in "{[":
+        return None
+    try:
+        value = json.loads(stripped)
+    except json.JSONDecodeError:
+        return None
+    return json.dumps(value, indent=2, ensure_ascii=False)
+
+
+def json_tokens(text: str) -> list[tuple[str, str]]:
+    tokens: list[tuple[str, str]] = []
+    index = 0
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if char in " \n\t":
+            end = index + 1
+            while end < length and text[end] in " \n\t":
+                end += 1
+            tokens.append(("", text[index:end]))
+            index = end
+            continue
+        if char in "{}[],:":
+            tokens.append(("json_punct", char))
+            index += 1
+            continue
+        if char == '"':
+            end = index + 1
+            while end < length:
+                if text[end] == "\\":
+                    end += 2
+                    continue
+                if text[end] == '"':
+                    end += 1
+                    break
+                end += 1
+            look = end
+            while look < length and text[look] in " \n\t":
+                look += 1
+            tag = "json_key" if look < length and text[look] == ":" else "json_str"
+            tokens.append((tag, text[index:end]))
+            index = end
+            continue
+        if char == "-" or char.isdigit():
+            end = index + 1
+            while end < length and text[end] in "0123456789.eE+-":
+                end += 1
+            tokens.append(("json_num", text[index:end]))
+            index = end
+            continue
+        matched_word = False
+        for word, tag in (("true", "json_bool"), ("false", "json_bool"), ("null", "json_null")):
+            if text.startswith(word, index):
+                tokens.append((tag, word))
+                index += len(word)
+                matched_word = True
+                break
+        if not matched_word:
+            tokens.append(("", char))
+            index += 1
+    return tokens
 
 
 def enable_dpi() -> None:
@@ -253,6 +324,12 @@ class RadarApp:
         self.log.tag_configure("info", foreground=BROWN)
         self.log.tag_configure("error", foreground=ERROR)
         self.log.tag_configure("msg", foreground=INK)
+        self.log.tag_configure("json_key", foreground=JSON_KEY, font=("Consolas", 10, "bold"))
+        self.log.tag_configure("json_str", foreground=JSON_STR)
+        self.log.tag_configure("json_num", foreground=JSON_NUM)
+        self.log.tag_configure("json_bool", foreground=JSON_BOOL, font=("Consolas", 10, "bold"))
+        self.log.tag_configure("json_null", foreground=JSON_NULL, font=("Consolas", 10, "italic"))
+        self.log.tag_configure("json_punct", foreground=INK)
 
     def _load_initial(self) -> None:
         self._refresh_brokers()
@@ -595,11 +672,14 @@ class RadarApp:
         self.count_label.configure(text=f"{self._message_count} {noun}")
         visible = payload.replace("\r\n", "\n").replace("\r", "\n")
         stamp = self._now()
+        header = f"{stamp}   {topic}"
         if matched:
-            line = f"{stamp}   {topic}   {visible}   → {matched.name}"
-            self._log(line, "match")
-        else:
-            self._log(f"{stamp}   {topic}   {visible}", "msg")
+            header += f"   → {matched.name}"
+        formatted = pretty_json(visible)
+        if formatted is None:
+            self._log(f"{header}   {visible}", "match" if matched else "msg")
+            return
+        self._log_json(header, formatted, "match" if matched else "msg")
 
     def _set_listening_ui(self, listening: bool) -> None:
         if listening:
@@ -631,13 +711,33 @@ class RadarApp:
         self.root.after(2200, clear_notice)
 
     def _log(self, text: str, tag: str) -> None:
-        self.log.configure(state="normal")
-        line_count = int(self.log.index("end-1c").split(".")[0])
-        if line_count > 1000:
-            self.log.delete("1.0", "2.0")
+        self._open_log()
         start = self.log.index("end-1c")
         self.log.insert("end", text + "\n")
         self.log.tag_add(tag, start, "end-1c")
+        self._close_log()
+
+    def _log_json(self, header: str, body: str, header_tag: str) -> None:
+        self._open_log()
+        start = self.log.index("end-1c")
+        self.log.insert("end", header + "\n")
+        self.log.tag_add(header_tag, start, "end-1c")
+        for tag, chunk in json_tokens(body):
+            if tag:
+                self.log.insert("end", chunk, tag)
+            else:
+                self.log.insert("end", chunk)
+        self.log.insert("end", "\n")
+        self._close_log()
+
+    def _open_log(self) -> None:
+        self.log.configure(state="normal")
+
+    def _close_log(self) -> None:
+        line_count = int(self.log.index("end-1c").split(".")[0])
+        while line_count > 1000:
+            self.log.delete("1.0", "2.0")
+            line_count -= 1
         self.log.configure(state="disabled")
         self.log.see("end")
 
