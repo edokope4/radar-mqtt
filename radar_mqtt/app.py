@@ -729,7 +729,7 @@ class RadarApp:
     def _log_payload(self, header: str, body: str, colored: bool, header_tag: str) -> None:
         self._open_log()
         start = self.log.index("end-1c")
-        self.log.insert("end", header + "   ")
+        self.log.insert("end", header + "\n")
         self.log.tag_add(header_tag, start, "end-1c")
         if colored:
             for tag, chunk in json_tokens(body):
