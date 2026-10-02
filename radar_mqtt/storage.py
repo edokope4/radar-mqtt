@@ -17,6 +17,12 @@ CONFIG_PATH = app_dir() / "config.json"
 
 
 @dataclass
+class Topic:
+    name: str
+    enabled: bool = True
+
+
+@dataclass
 class Broker:
     id: str
     name: str
@@ -26,7 +32,7 @@ class Broker:
     password: str = ""
     tls: bool = False
     client_id: str = "radar-mqtt"
-    topics: list[str] = field(default_factory=lambda: ["cafetera/hacer"])
+    topics: list[Topic] = field(default_factory=lambda: [Topic("cafetera/hacer")])
     qos: int = 0
 
 
@@ -54,7 +60,7 @@ def default_settings() -> Settings:
                 name="Mosquitto test",
                 host="test.mosquitto.org",
                 port=1883,
-                topics=["cafetera/hacer"],
+                topics=[Topic("cafetera/hacer")],
                 qos=0,
                 client_id="radar-mqtt",
             )
@@ -66,9 +72,30 @@ def default_settings() -> Settings:
     )
 
 
+def _topic_from_raw(item: object) -> Topic | None:
+    if isinstance(item, str):
+        name = item.strip()
+        return Topic(name) if name else None
+    if isinstance(item, dict):
+        name = str(item.get("name") or "").strip()
+        if not name:
+            return None
+        return Topic(name, bool(item.get("enabled", True)))
+    return None
+
+
+def topics_from_raw(raw: object) -> list[Topic]:
+    items = raw if isinstance(raw, list) else []
+    topics = [topic for item in items if (topic := _topic_from_raw(item)) is not None]
+    return topics or [Topic("cafetera/hacer")]
+
+
+def enabled_topic_names(topics: list[Topic]) -> list[str]:
+    return [topic.name for topic in topics if topic.enabled and topic.name.strip()]
+
+
 def _broker_from_dict(raw: dict) -> Broker:
-    topics = raw.get("topics") or ["cafetera/hacer"]
-    topics = [str(topic).strip() for topic in topics if str(topic).strip()]
+    topics = topics_from_raw(raw.get("topics"))
     return Broker(
         id=str(raw.get("id") or uuid.uuid4()),
         name=str(raw.get("name") or "Broker"),
@@ -78,7 +105,7 @@ def _broker_from_dict(raw: dict) -> Broker:
         password=str(raw.get("password") or ""),
         tls=bool(raw.get("tls")),
         client_id=str(raw.get("client_id") or "radar-mqtt"),
-        topics=topics or ["cafetera/hacer"],
+        topics=topics,
         qos=max(0, min(2, int(raw.get("qos") or 0))),
     )
 

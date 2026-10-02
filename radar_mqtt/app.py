@@ -16,6 +16,8 @@ from radar_mqtt.storage import (
     Broker,
     SavedPayload,
     Settings,
+    Topic,
+    enabled_topic_names,
     load_settings,
     match_payload,
     save_settings,
@@ -216,12 +218,38 @@ class RadarApp:
         self.tls_check = ttk.Checkbutton(extra, text="TLS", variable=self.tls_var)
         self.tls_check.pack(side="left")
 
-        ttk.Label(frame, text="Tópicos, uno por línea").grid(row=7, column=0, columnspan=3, sticky="w", pady=(8, 2))
-        self.topics_text = tk.Text(frame, height=4, font=("Segoe UI", 10), relief="flat", bg="white", fg=INK)
-        self.topics_text.grid(row=8, column=0, columnspan=3, sticky="ew")
+        ttk.Label(frame, text="Tópicos").grid(row=7, column=0, sticky="w", pady=(8, 2))
+        ttk.Label(frame, text="Desmarcá para no escuchar", style="Muted.TLabel").grid(
+            row=7, column=1, columnspan=2, sticky="e", pady=(8, 2)
+        )
+        holder = tk.Frame(frame, bg="white", highlightbackground="#E4DDD6", highlightthickness=1)
+        holder.grid(row=8, column=0, columnspan=3, sticky="ew")
+        holder.columnconfigure(0, weight=1)
+        self.topics_canvas = tk.Canvas(holder, height=88, bg="white", highlightthickness=0)
+        self.topics_canvas.grid(row=0, column=0, sticky="ew")
+        topics_scroll = ttk.Scrollbar(holder, orient="vertical", command=self.topics_canvas.yview)
+        topics_scroll.grid(row=0, column=1, sticky="ns")
+        self.topics_canvas.configure(yscrollcommand=topics_scroll.set)
+        self.topics_list = tk.Frame(self.topics_canvas, bg="white")
+        self._topics_window = self.topics_canvas.create_window((0, 0), window=self.topics_list, anchor="nw")
+        self.topics_list.bind("<Configure>", self._fit_topics)
+        self.topics_canvas.bind("<Configure>", self._fit_topics_width)
+        self.topics_canvas.bind("<Enter>", self._bind_topics_wheel)
+        self.topics_canvas.bind("<Leave>", self._unbind_topics_wheel)
+        self._topic_rows: list[tuple[tk.Frame, str, tk.BooleanVar, ttk.Checkbutton, tk.Button]] = []
+
+        add = tk.Frame(frame, bg=BG)
+        add.grid(row=9, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        add.columnconfigure(0, weight=1)
+        self.topic_var = tk.StringVar()
+        self.topic_entry = ttk.Entry(add, textvariable=self.topic_var)
+        self.topic_entry.grid(row=0, column=0, sticky="ew")
+        self.topic_entry.bind("<Return>", lambda _event: self.add_topic())
+        self.add_topic_button = ttk.Button(add, text="Agregar", command=self.add_topic)
+        self.add_topic_button.grid(row=0, column=1, padx=(8, 0))
 
         actions = tk.Frame(frame, bg=BG)
-        actions.grid(row=9, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        actions.grid(row=10, column=0, columnspan=3, sticky="ew", pady=(10, 0))
         self.save_broker_button = ttk.Button(actions, text="Guardar broker", command=self.save_broker)
         self.save_broker_button.pack(side="left")
         self.delete_broker_button = ttk.Button(actions, text="Eliminar", command=self.delete_broker)
@@ -376,6 +404,88 @@ class RadarApp:
         for item in self.settings.payloads:
             self.payload_list.insert("end", f"{item.name}   ·   {item.body}")
 
+    def _fit_topics(self, _event: object = None) -> None:
+        self.topics_canvas.configure(scrollregion=self.topics_canvas.bbox("all"))
+
+    def _fit_topics_width(self, event: tk.Event) -> None:
+        self.topics_canvas.itemconfigure(self._topics_window, width=event.width)
+
+    def _bind_topics_wheel(self, _event: object) -> None:
+        self.topics_canvas.bind_all("<MouseWheel>", self._scroll_topics)
+
+    def _unbind_topics_wheel(self, _event: object) -> None:
+        self.topics_canvas.unbind_all("<MouseWheel>")
+
+    def _scroll_topics(self, event: tk.Event) -> None:
+        self.topics_canvas.yview_scroll(int(-event.delta / 120), "units")
+
+    def _set_topics(self, topics: list[Topic]) -> None:
+        for frame, _name, _var, _check, _remove in self._topic_rows:
+            frame.destroy()
+        self._topic_rows = []
+        for topic in topics:
+            self._add_topic_row(topic.name, topic.enabled)
+
+    def _add_topic_row(self, name: str, enabled: bool) -> None:
+        row = tk.Frame(self.topics_list, bg="white")
+        row.pack(fill="x", padx=4, pady=1)
+        variable = tk.BooleanVar(value=enabled)
+        check = ttk.Checkbutton(row, variable=variable, command=lambda: self._toggle_topic(name))
+        check.pack(side="left")
+        label = tk.Label(row, text=name, bg="white", fg=INK if enabled else MUTED, anchor="w", font=("Segoe UI", 10))
+        label.pack(side="left", fill="x", expand=True, padx=(4, 8))
+        remove = tk.Button(
+            row,
+            text="×",
+            command=lambda: self._remove_topic(name),
+            bg="white",
+            fg=MUTED,
+            activebackground="white",
+            activeforeground=ERROR,
+            relief="flat",
+            bd=0,
+            padx=4,
+            cursor="hand2",
+        )
+        remove.pack(side="right")
+        variable.trace_add("write", lambda *_args: label.configure(fg=INK if variable.get() else MUTED))
+        self._topic_rows.append((row, name, variable, check, remove))
+        self._fit_topics()
+
+    def _topics_from_rows(self) -> list[Topic]:
+        return [Topic(name, bool(variable.get())) for _row, name, variable, _check, _remove in self._topic_rows]
+
+    def _toggle_topic(self, _name: str) -> None:
+        self._persist_topics()
+
+    def _persist_topics(self) -> None:
+        broker = self._broker_by_id(self._draft_id)
+        if broker is None:
+            return
+        broker.topics = self._topics_from_rows()
+        save_settings(self.settings)
+
+    def add_topic(self) -> None:
+        name = self.topic_var.get().strip()
+        if not name:
+            messagebox.showwarning("Radar MQTT", "Escribí el tópico.")
+            return
+        if any(current == name for _row, current, _variable, _check, _remove in self._topic_rows):
+            messagebox.showwarning("Radar MQTT", "Ese tópico ya está en la lista.")
+            return
+        self._add_topic_row(name, True)
+        self.topic_var.set("")
+        self._persist_topics()
+
+    def _remove_topic(self, name: str) -> None:
+        kept = [(row, current, variable, check, remove) for row, current, variable, check, remove in self._topic_rows if current != name]
+        for row, current, _variable, _check, _remove in self._topic_rows:
+            if current == name:
+                row.destroy()
+        self._topic_rows = kept
+        self._fit_topics()
+        self._persist_topics()
+
     def _select_broker(self, broker: Broker) -> None:
         self.settings.selected_broker_id = broker.id
         self._draft_id = broker.id
@@ -387,9 +497,7 @@ class RadarApp:
         self.client_var.set(broker.client_id)
         self.qos_var.set(str(broker.qos))
         self.tls_var.set(broker.tls)
-        self.topics_text.configure(state="normal")
-        self.topics_text.delete("1.0", "end")
-        self.topics_text.insert("1.0", "\n".join(broker.topics))
+        self._set_topics(broker.topics)
         self._refresh_brokers()
 
     def _on_broker_selected(self, _event: object) -> None:
@@ -410,9 +518,7 @@ class RadarApp:
         self.client_var.set("radar-mqtt")
         self.qos_var.set("0")
         self.tls_var.set(False)
-        self.topics_text.configure(state="normal")
-        self.topics_text.delete("1.0", "end")
-        self.topics_text.insert("1.0", "cafetera/hacer")
+        self._set_topics([Topic("cafetera/hacer")])
         self._notice("Completá el broker y guardalo, o empezá a escuchar.")
 
     def read_form(self) -> Broker:
@@ -432,7 +538,7 @@ class RadarApp:
             raise ValueError("El QoS tiene que ser 0, 1 o 2.") from None
         if qos not in (0, 1, 2):
             raise ValueError("El QoS tiene que ser 0, 1 o 2.")
-        topics = [line.strip() for line in self.topics_text.get("1.0", "end").splitlines() if line.strip()]
+        topics = self._topics_from_rows()
         if not topics:
             raise ValueError("Agregá al menos un tópico.")
         broker_id = self._draft_id or self.settings.selected_broker_id or str(uuid.uuid4())
@@ -549,8 +655,13 @@ class RadarApp:
         except ValueError as error:
             messagebox.showwarning("Radar MQTT", str(error))
             return
+        enabled = enabled_topic_names(broker.topics)
+        if not enabled:
+            self._store_broker(broker)
+            messagebox.showwarning("Radar MQTT", "Activá al menos un tópico para escuchar.")
+            return
         self._store_broker(broker)
-        self._active_topics = list(broker.topics)
+        self._active_topics = enabled
         self._active_qos = broker.qos
         self._user_stop = False
         self.listening = True
@@ -703,7 +814,11 @@ class RadarApp:
         self.port_entry.configure(state=state)
         self.qos_entry.configure(state=state)
         self.tls_check.configure(state=state)
-        self.topics_text.configure(state=state)
+        self.topic_entry.configure(state=state)
+        self.add_topic_button.configure(state=state)
+        for _frame, _name, _var, check, remove in self._topic_rows:
+            check.configure(state=state)
+            remove.configure(state=state)
         self.save_broker_button.configure(state=state)
         self.delete_broker_button.configure(state=state)
 
