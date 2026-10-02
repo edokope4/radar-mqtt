@@ -111,6 +111,17 @@ def enable_dpi() -> None:
         return
 
 
+def _subscription_rejected(reason_code_list: object) -> bool:
+    codes = reason_code_list if isinstance(reason_code_list, (list, tuple)) else [reason_code_list]
+    for code in codes:
+        if getattr(code, "is_failure", False):
+            return True
+        value = getattr(code, "value", code)
+        if isinstance(value, int) and value >= 128:
+            return True
+    return False
+
+
 class RadarApp:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -121,6 +132,10 @@ class RadarApp:
         self._user_stop = False
         self._active_topics: list[str] = []
         self._active_qos = 0
+        self._subscribe_queue: list[str] = []
+        self._inflight_topic: str | None = None
+        self._subscribed: list[str] = []
+        self._topic_failures: dict[str, int] = {}
         self._message_count = 0
         self._draft_id = ""
         self._copy_buttons: list[tk.Button] = []
@@ -749,6 +764,10 @@ class RadarApp:
         self._store_broker(broker)
         self._active_topics = enabled
         self._active_qos = broker.qos
+        self._subscribe_queue = []
+        self._inflight_topic = None
+        self._subscribed = []
+        self._topic_failures = {}
         self._user_stop = False
         self.listening = True
         self._message_count = 0
@@ -790,6 +809,7 @@ class RadarApp:
             client.tls_set()
         if listen:
             client.on_connect = self._on_connect
+            client.on_subscribe = self._on_subscribe
             client.on_message = self._on_message
             client.on_disconnect = self._on_disconnect
         return client
@@ -799,11 +819,48 @@ class RadarApp:
             if getattr(reason_code, "is_failure", reason_code not in (0, "Success")):
                 self.events.put(("broker_error", f"El broker rechazó la conexión ({reason_code})"))
                 return
-            for topic in self._active_topics:
-                client.subscribe(topic, qos=self._active_qos)
-            self.events.put(("listening", list(self._active_topics)))
+            self._subscribed = []
+            self._inflight_topic = None
+            self._subscribe_queue = list(self._active_topics)
+            self._subscribe_next(client)
         except Exception as error:
             self.events.put(("broker_error", str(error)))
+
+    def _subscribe_next(self, client: mqtt.Client) -> None:
+        if self._user_stop:
+            return
+        if not self._subscribe_queue:
+            self._inflight_topic = None
+            self.events.put(("listening", list(self._subscribed)))
+            return
+        topic = self._subscribe_queue.pop(0)
+        self._inflight_topic = topic
+        client.subscribe(topic, qos=self._active_qos)
+
+    def _on_subscribe(
+        self,
+        client: mqtt.Client,
+        _userdata: object,
+        _mid: int,
+        reason_code_list: object,
+        _properties: object,
+    ) -> None:
+        topic = self._inflight_topic
+        self._inflight_topic = None
+        if topic and _subscription_rejected(reason_code_list):
+            self._reject_topic(topic)
+        elif topic:
+            self._topic_failures.pop(topic, None)
+            self._subscribed.append(topic)
+        self._subscribe_next(client)
+
+    def _reject_topic(self, topic: str) -> None:
+        self._active_topics = [item for item in self._active_topics if item != topic]
+        self._subscribe_queue = [item for item in self._subscribe_queue if item != topic]
+        self._topic_failures.pop(topic, None)
+        self.events.put(("topic_rejected", topic))
+        if not self._active_topics:
+            self.events.put(("no_topics",))
 
     def _on_message(self, _client: mqtt.Client, _userdata: object, message: mqtt.MQTTMessage) -> None:
         try:
@@ -815,9 +872,17 @@ class RadarApp:
     def _on_disconnect(self, _client: mqtt.Client, _userdata: object, _flags: object, reason_code: object, _properties: object) -> None:
         if self._user_stop:
             return
+        topic = self._inflight_topic
+        self._inflight_topic = None
         reason = str(reason_code)
         if reason in {"0", "Normal disconnection", "Success"}:
             return
+        if topic:
+            failures = self._topic_failures.get(topic, 0) + 1
+            self._topic_failures[topic] = failures
+            if failures >= 2:
+                self._reject_topic(topic)
+                return
         self.events.put(("reconnecting", reason))
 
     def stop_listen(self) -> None:
@@ -861,6 +926,15 @@ class RadarApp:
         elif kind == "reconnecting":
             self._set_status("Reconectando…", WARN)
             self._log(f"Se cortó la conexión ({event[1]}). Reintentando…", "error")
+        elif kind == "topic_rejected":
+            self._log(f"El broker rechazó «{event[1]}». Se deja de escuchar ese tópico.", "error")
+        elif kind == "no_topics":
+            self._user_stop = True
+            self.listening = False
+            self._shutdown_client()
+            self._set_listening_ui(False)
+            self._set_status("Detenido", ERROR)
+            self._log("El broker rechazó todos los tópicos.", "error")
         elif kind == "broker_error":
             self._set_status("Reconectando…", WARN)
             self._log(event[1], "error")
