@@ -19,10 +19,10 @@ py -3 -m venv .venv
 
 ## Uso
 
-1. Elegí o creá un broker: nombre, host, puerto, usuario, contraseña, client id, QoS y TLS.
-2. Escribí los tópicos, uno por línea. El puerto habitual es 1883 sin TLS y 8883 con TLS.
-3. Guardá payloads con un nombre y el texto exacto del mensaje. El valor por defecto es el tópico `cafetera/hacer` y el payload `hacer`, etiquetado como «Hacer café».
-4. Pulsá **Comenzar a escuchar**. Si activás **Mostrar solo estos payloads**, el registro oculta los mensajes que no coinciden.
+1. Elige o crea un broker: nombre, host, puerto, usuario, contraseña, client id, QoS y TLS.
+2. Escribe los tópicos, uno por línea. El puerto habitual es 1883 sin TLS y 8883 con TLS.
+3. Guarda los payloads con un nombre y el texto exacto del mensaje. El valor predeterminado es el tópico `cafetera/hacer` y el payload `hacer`, etiquetado como «Hacer café».
+4. Pulsa **Comenzar a escuchar**. Si activas **Mostrar solo estos payloads**, el registro oculta los mensajes que no coinciden.
 
 La configuración se guarda en `%APPDATA%\RadarMqtt\config.json`.
 
