@@ -6,6 +6,7 @@ import os
 import queue
 import threading
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from tkinter import filedialog, messagebox, ttk
 import tkinter as tk
@@ -24,19 +25,75 @@ from radar_mqtt.storage import (
     settings_from_document,
 )
 
-BG = "#F6F3EF"
-INK = "#2C211C"
-MUTED = "#8A7568"
-BROWN = "#6F4E37"
-BROWN_DARK = "#5C3A2E"
-OK = "#2E7D4F"
-WARN = "#C47A3A"
-ERROR = "#A33B32"
-JSON_KEY = "#6F4E37"
-JSON_STR = "#1B7A4E"
-JSON_NUM = "#B86E2A"
-JSON_BOOL = "#3E6B9A"
-JSON_NULL = "#8A7568"
+@dataclass(frozen=True)
+class Theme:
+    bg: str
+    field: str
+    ink: str
+    muted: str
+    accent: str
+    accent_dark: str
+    button: str
+    button_dark: str
+    ok: str
+    warn: str
+    error: str
+    stop: str
+    stop_dark: str
+    json_key: str
+    json_str: str
+    json_num: str
+    json_bool: str
+    json_null: str
+    line: str
+    copy_active: str
+
+
+LIGHT = Theme(
+    bg="#F6F3EF",
+    field="#FFFFFF",
+    ink="#2C211C",
+    muted="#8A7568",
+    accent="#6F4E37",
+    accent_dark="#5C3A2E",
+    button="#6F4E37",
+    button_dark="#5C3A2E",
+    ok="#2E7D4F",
+    warn="#C47A3A",
+    error="#A33B32",
+    stop="#A33B32",
+    stop_dark="#7E2C26",
+    json_key="#6F4E37",
+    json_str="#1B7A4E",
+    json_num="#B86E2A",
+    json_bool="#3E6B9A",
+    json_null="#8A7568",
+    line="#E4DDD6",
+    copy_active="#EFEAE4",
+)
+
+DARK = Theme(
+    bg="#161311",
+    field="#241E1A",
+    ink="#F6F1EC",
+    muted="#A8988C",
+    accent="#E0C4A8",
+    accent_dark="#C4A484",
+    button="#6F4E37",
+    button_dark="#5C3A2E",
+    ok="#7DCEA0",
+    warn="#E0A15A",
+    error="#E07A72",
+    stop="#A33B32",
+    stop_dark="#7E2C26",
+    json_key="#E0C4A8",
+    json_str="#8FD0A8",
+    json_num="#F0B56B",
+    json_bool="#9EC1E8",
+    json_null="#A8988C",
+    line="#3A322C",
+    copy_active="#3A322C",
+)
 
 
 def pretty_json(text: str) -> str | None:
@@ -141,12 +198,15 @@ class RadarApp:
         self._copy_buttons: list[tk.Button] = []
         self._publish_broker_id = ""
         self._publishing = False
+        self.theme = DARK if settings.dark else LIGHT
+        self._status_role = "muted"
 
         self.root = tk.Tk()
+        self.root.radar_role = "panel"
         self.root.title("Radar MQTT")
         self.root.geometry("1040x740")
         self.root.minsize(900, 640)
-        self.root.configure(bg=BG)
+        self.root.configure(bg=self.theme.bg)
         self._style()
         self._build()
         self._load_initial()
@@ -157,28 +217,124 @@ class RadarApp:
         self.root.mainloop()
 
     def _style(self) -> None:
+        theme = self.theme
         style = ttk.Style(self.root)
         style.theme_use("clam")
-        style.configure(".", font=("Segoe UI", 10), background=BG)
-        style.configure("TFrame", background=BG)
-        style.configure("TLabel", background=BG, foreground=INK)
-        style.configure("TLabelframe", background=BG, foreground=BROWN)
-        style.configure("TLabelframe.Label", background=BG, foreground=BROWN, font=("Segoe UI", 11, "bold"))
-        style.configure("TButton", padding=(10, 6))
-        style.configure("TCheckbutton", background=BG, foreground=INK)
-        style.configure("TEntry", padding=4)
-        style.configure("Muted.TLabel", background=BG, foreground=MUTED)
+        style.configure(".", font=("Segoe UI", 10), background=theme.bg, foreground=theme.ink)
+        style.configure("TFrame", background=theme.bg)
+        style.configure("TLabel", background=theme.bg, foreground=theme.ink)
+        style.configure("TLabelframe", background=theme.bg, foreground=theme.accent)
+        style.configure("TLabelframe.Label", background=theme.bg, foreground=theme.accent, font=("Segoe UI", 11, "bold"))
+        style.configure("TButton", padding=(10, 6), background=theme.field, foreground=theme.ink)
+        style.map("TButton", background=[("active", theme.copy_active)])
+        style.configure("TCheckbutton", background=theme.bg, foreground=theme.ink)
+        style.map("TCheckbutton", background=[("active", theme.bg)])
+        style.configure("TEntry", padding=4, fieldbackground=theme.field, foreground=theme.ink, bordercolor=theme.line)
+        style.configure("TSpinbox", fieldbackground=theme.field, foreground=theme.ink, arrowcolor=theme.ink, bordercolor=theme.line)
+        style.configure("TCombobox", fieldbackground=theme.field, background=theme.bg, foreground=theme.ink, arrowcolor=theme.ink, bordercolor=theme.line)
+        style.map("TCombobox", fieldbackground=[("readonly", theme.field)], foreground=[("readonly", theme.ink)])
+        style.configure("Field.TCheckbutton", background=theme.field, foreground=theme.ink)
+        style.map("Field.TCheckbutton", background=[("active", theme.field)])
+        style.configure("Muted.TLabel", background=theme.bg, foreground=theme.muted)
+
+    def _toggle_theme(self) -> None:
+        self.settings.dark = bool(self.dark_var.get())
+        save_settings(self.settings)
+        self.theme = DARK if self.settings.dark else LIGHT
+        self._apply_theme()
+
+    def _apply_theme(self) -> None:
+        self._style()
+        self._paint(self.root)
+        self._paint(self._log_menu)
+        self._paint_log_tags()
+        self._set_listening_ui(self.listening)
+        self._set_status(self.status_label.cget("text"), self._status_role)
+
+    def _paint(self, widget: tk.Misc) -> None:
+        role = getattr(widget, "radar_role", None)
+        theme = self.theme
+        if role == "panel":
+            widget.configure(bg=theme.bg)
+        elif role == "ink":
+            widget.configure(bg=theme.bg, fg=theme.ink)
+        elif role == "muted":
+            widget.configure(bg=theme.bg, fg=theme.muted)
+        elif role == "notice":
+            widget.configure(bg=theme.bg, fg=theme.ok)
+        elif role == "status":
+            widget.configure(bg=theme.bg, fg=getattr(theme, self._status_role))
+        elif role == "field":
+            options = {"bg": theme.field}
+            keys = set(widget.keys())
+            if "fg" in keys:
+                options["fg"] = theme.ink
+            if "insertbackground" in keys:
+                options["insertbackground"] = theme.ink
+            if "highlightbackground" in keys and str(widget.cget("highlightthickness")) not in {"0", ""}:
+                options["highlightbackground"] = theme.line
+            widget.configure(**options)
+        elif role == "topic":
+            enabled = bool(widget.radar_enabled.get())
+            widget.configure(bg=theme.field, fg=theme.ink if enabled else theme.muted)
+        elif role == "field-button":
+            widget.configure(
+                bg=theme.field,
+                fg=theme.accent,
+                activebackground=theme.copy_active,
+                activeforeground=theme.accent_dark,
+            )
+        elif role == "danger-button":
+            widget.configure(
+                bg=theme.field,
+                fg=theme.muted,
+                activebackground=theme.field,
+                activeforeground=theme.error,
+            )
+        elif role == "primary":
+            widget.configure(
+                bg=theme.button,
+                fg="white",
+                activebackground=theme.button_dark,
+                activeforeground="white",
+            )
+        elif role == "menu":
+            widget.configure(bg=theme.field, fg=theme.ink, activebackground=theme.button, activeforeground="white")
+        for child in widget.winfo_children():
+            self._paint(child)
+
+    def _paint_log_tags(self) -> None:
+        theme = self.theme
+        self.log.tag_configure("match", foreground=theme.ok, font=("Consolas", 10, "bold"))
+        self.log.tag_configure("info", foreground=theme.accent)
+        self.log.tag_configure("error", foreground=theme.error)
+        self.log.tag_configure("msg", foreground=theme.ink)
+        self.log.tag_configure("json_key", foreground=theme.json_key, font=("Consolas", 10, "bold"))
+        self.log.tag_configure("json_str", foreground=theme.json_str)
+        self.log.tag_configure("json_num", foreground=theme.json_num)
+        self.log.tag_configure("json_bool", foreground=theme.json_bool, font=("Consolas", 10, "bold"))
+        self.log.tag_configure("json_null", foreground=theme.json_null, font=("Consolas", 10, "italic"))
+        self.log.tag_configure("json_punct", foreground=theme.ink)
 
     def _build(self) -> None:
-        header = tk.Frame(self.root, bg=BG)
+        header = tk.Frame(self.root, bg=self.theme.bg)
+        header.radar_role = "panel"
         header.pack(fill="x", padx=16, pady=(14, 6))
-        tk.Label(header, text="Radar MQTT", bg=BG, fg=INK, font=("Segoe UI", 20, "bold")).pack(side="left")
-        self.status_label = tk.Label(header, text="Detenido", bg=BG, fg=MUTED, font=("Segoe UI", 11))
+        title = tk.Label(header, text="Radar MQTT", bg=self.theme.bg, fg=self.theme.ink, font=("Segoe UI", 20, "bold"))
+        title.radar_role = "ink"
+        title.pack(side="left")
+        self.status_label = tk.Label(header, text="Detenido", bg=self.theme.bg, fg=self.theme.muted, font=("Segoe UI", 11))
+        self.status_label.radar_role = "status"
         self.status_label.pack(side="right", padx=(12, 0))
-        self.notice_label = tk.Label(header, text="", bg=BG, fg=OK, font=("Segoe UI", 10))
+        self.dark_var = tk.BooleanVar(value=self.settings.dark)
+        ttk.Checkbutton(header, text="Oscuro", variable=self.dark_var, command=self._toggle_theme).pack(side="right")
+        self.notice_label = tk.Label(header, text="", bg=self.theme.bg, fg=self.theme.ok, font=("Segoe UI", 10))
+        self.notice_label.radar_role = "notice"
         self.notice_label.pack(side="right")
 
-        body = tk.Frame(self.root, bg=BG)
+        body = tk.Frame(self.root, bg=self.theme.bg)
+        body.radar_role = "panel"
+        body.radar_role = "panel"
         body.pack(fill="both", expand=False, padx=16, pady=4)
         body.columnconfigure(0, weight=3)
         body.columnconfigure(1, weight=2)
@@ -225,7 +381,8 @@ class RadarApp:
             entry.grid(row=row, column=1, columnspan=2, sticky="ew", pady=4)
             self._entries.append(entry)
 
-        extra = tk.Frame(frame, bg=BG)
+        extra = tk.Frame(frame, bg=self.theme.bg)
+        extra.radar_role = "panel"
         extra.grid(row=6, column=0, columnspan=3, sticky="ew", pady=4)
         ttk.Label(extra, text="Puerto").pack(side="left")
         self.port_entry = ttk.Entry(extra, textvariable=self.port_var, width=8)
@@ -240,15 +397,18 @@ class RadarApp:
         ttk.Label(frame, text="Desmarcá para no escuchar", style="Muted.TLabel").grid(
             row=7, column=1, columnspan=2, sticky="e", pady=(8, 2)
         )
-        holder = tk.Frame(frame, bg="white", highlightbackground="#E4DDD6", highlightthickness=1)
+        holder = tk.Frame(frame, bg=self.theme.field, highlightbackground=self.theme.line, highlightthickness=1)
+        holder.radar_role = "field"
         holder.grid(row=8, column=0, columnspan=3, sticky="ew")
         holder.columnconfigure(0, weight=1)
-        self.topics_canvas = tk.Canvas(holder, height=88, bg="white", highlightthickness=0)
+        self.topics_canvas = tk.Canvas(holder, height=88, bg=self.theme.field, highlightthickness=0)
+        self.topics_canvas.radar_role = "field"
         self.topics_canvas.grid(row=0, column=0, sticky="ew")
         topics_scroll = ttk.Scrollbar(holder, orient="vertical", command=self.topics_canvas.yview)
         topics_scroll.grid(row=0, column=1, sticky="ns")
         self.topics_canvas.configure(yscrollcommand=topics_scroll.set)
-        self.topics_list = tk.Frame(self.topics_canvas, bg="white")
+        self.topics_list = tk.Frame(self.topics_canvas, bg=self.theme.field)
+        self.topics_list.radar_role = "field"
         self._topics_window = self.topics_canvas.create_window((0, 0), window=self.topics_list, anchor="nw")
         self.topics_list.bind("<Configure>", self._fit_topics)
         self.topics_canvas.bind("<Configure>", self._fit_topics_width)
@@ -256,7 +416,8 @@ class RadarApp:
         self.topics_canvas.bind("<Leave>", self._unbind_topics_wheel)
         self._topic_rows: list[tuple[tk.Frame, str, tk.BooleanVar, ttk.Checkbutton, tk.Button]] = []
 
-        add = tk.Frame(frame, bg=BG)
+        add = tk.Frame(frame, bg=self.theme.bg)
+        add.radar_role = "panel"
         add.grid(row=9, column=0, columnspan=3, sticky="ew", pady=(6, 0))
         add.columnconfigure(0, weight=1)
         self.topic_var = tk.StringVar()
@@ -266,7 +427,8 @@ class RadarApp:
         self.add_topic_button = ttk.Button(add, text="Agregar", command=self.add_topic)
         self.add_topic_button.grid(row=0, column=1, padx=(8, 0))
 
-        actions = tk.Frame(frame, bg=BG)
+        actions = tk.Frame(frame, bg=self.theme.bg)
+        actions.radar_role = "panel"
         actions.grid(row=10, column=0, columnspan=3, sticky="ew", pady=(10, 0))
         self.save_broker_button = ttk.Button(actions, text="Guardar broker", command=self.save_broker)
         self.save_broker_button.pack(side="left")
@@ -274,7 +436,8 @@ class RadarApp:
         self.delete_broker_button.pack(side="left", padx=8)
         ttk.Label(actions, text="1883 sin TLS, 8883 con TLS", style="Muted.TLabel").pack(side="right")
 
-        files = tk.Frame(frame, bg=BG)
+        files = tk.Frame(frame, bg=self.theme.bg)
+        files.radar_role = "panel"
         files.grid(row=11, column=0, columnspan=3, sticky="w", pady=(8, 0))
         ttk.Button(files, text="Exportar", command=self.export_settings).pack(side="left")
         ttk.Button(files, text="Importar", command=self.import_settings).pack(side="left", padx=8)
@@ -296,7 +459,8 @@ class RadarApp:
         self.publish_topic_entry.grid(row=1, column=1, sticky="ew", pady=4)
 
         ttk.Label(frame, text="QoS").grid(row=2, column=0, sticky="w", pady=4)
-        qos_row = tk.Frame(frame, bg=BG)
+        qos_row = tk.Frame(frame, bg=self.theme.bg)
+        qos_row.radar_role = "panel"
         qos_row.grid(row=2, column=1, sticky="ew", pady=4)
         self.publish_qos_var = tk.StringVar(value="0")
         self.publish_qos_entry = ttk.Spinbox(qos_row, from_=0, to=2, textvariable=self.publish_qos_var, width=4)
@@ -310,21 +474,23 @@ class RadarApp:
             height=8,
             wrap="word",
             font=("Consolas", 10),
-            bg="white",
-            fg=INK,
+            bg=self.theme.field,
+            fg=self.theme.ink,
+            insertbackground=self.theme.ink,
             relief="flat",
             padx=6,
             pady=6,
         )
+        self.publish_payload.radar_role = "field"
         self.publish_payload.grid(row=4, column=0, columnspan=2, sticky="nsew")
 
         self.publish_button = tk.Button(
             frame,
             text="Publicar",
             command=self.publish_message,
-            bg=BROWN,
+            bg=self.theme.button,
             fg="white",
-            activebackground=BROWN_DARK,
+            activebackground=self.theme.button_dark,
             activeforeground="white",
             font=("Segoe UI", 11, "bold"),
             relief="flat",
@@ -332,18 +498,20 @@ class RadarApp:
             pady=6,
             cursor="hand2",
         )
+        self.publish_button.radar_role = "primary"
         self.publish_button.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(10, 0))
 
     def _build_listen_bar(self) -> None:
-        bar = tk.Frame(self.root, bg=BG)
+        bar = tk.Frame(self.root, bg=self.theme.bg)
+        bar.radar_role = "panel"
         bar.pack(fill="x", padx=16, pady=(8, 4))
         self.listen_button = tk.Button(
             bar,
             text="Comenzar a escuchar",
             command=self.toggle_listen,
-            bg=BROWN,
+            bg=self.theme.button,
             fg="white",
-            activebackground=BROWN_DARK,
+            activebackground=self.theme.button_dark,
             activeforeground="white",
             font=("Segoe UI", 12, "bold"),
             relief="flat",
@@ -351,6 +519,7 @@ class RadarApp:
             pady=8,
             cursor="hand2",
         )
+        self.listen_button.radar_role = "primary"
         self.listen_button.pack(fill="x")
 
     def _build_log(self) -> None:
@@ -359,9 +528,11 @@ class RadarApp:
         frame.rowconfigure(1, weight=1)
         frame.columnconfigure(0, weight=1)
 
-        top = tk.Frame(frame, bg=BG)
+        top = tk.Frame(frame, bg=self.theme.bg)
+        top.radar_role = "panel"
         top.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        self.count_label = tk.Label(top, text="0 mensajes", bg=BG, fg=MUTED, font=("Segoe UI", 10))
+        self.count_label = tk.Label(top, text="0 mensajes", bg=self.theme.bg, fg=self.theme.muted, font=("Segoe UI", 10))
+        self.count_label.radar_role = "muted"
         self.count_label.pack(side="left")
         ttk.Button(top, text="Limpiar", command=self.clear_log).pack(side="right")
 
@@ -370,13 +541,15 @@ class RadarApp:
             height=12,
             wrap="char",
             font=("Consolas", 10),
-            bg="white",
-            fg=INK,
+            bg=self.theme.field,
+            fg=self.theme.ink,
+            insertbackground=self.theme.ink,
             relief="flat",
             padx=8,
             pady=8,
             cursor="xterm",
         )
+        self.log.radar_role = "field"
         self.log.grid(row=1, column=0, sticky="nsew")
         scroll_y = ttk.Scrollbar(frame, orient="vertical", command=self.log.yview)
         scroll_y.grid(row=1, column=1, sticky="ns")
@@ -385,19 +558,11 @@ class RadarApp:
         self.log.bind("<Control-a>", self._select_all_log)
         self.log.bind("<Control-A>", self._select_all_log)
         self.log.bind("<Button-3>", self._show_log_menu)
-        self._log_menu = tk.Menu(self.log, tearoff=0)
+        self._log_menu = tk.Menu(self.log, tearoff=0, bg=self.theme.field, fg=self.theme.ink)
+        self._log_menu.radar_role = "menu"
         self._log_menu.add_command(label="Copiar", command=self._copy_log)
         self._log_menu.add_command(label="Seleccionar todo", command=self._select_all_log)
-        self.log.tag_configure("match", foreground=OK, font=("Consolas", 10, "bold"))
-        self.log.tag_configure("info", foreground=BROWN)
-        self.log.tag_configure("error", foreground=ERROR)
-        self.log.tag_configure("msg", foreground=INK)
-        self.log.tag_configure("json_key", foreground=JSON_KEY, font=("Consolas", 10, "bold"))
-        self.log.tag_configure("json_str", foreground=JSON_STR)
-        self.log.tag_configure("json_num", foreground=JSON_NUM)
-        self.log.tag_configure("json_bool", foreground=JSON_BOOL, font=("Consolas", 10, "bold"))
-        self.log.tag_configure("json_null", foreground=JSON_NULL, font=("Consolas", 10, "italic"))
-        self.log.tag_configure("json_punct", foreground=INK)
+        self._paint_log_tags()
 
     def _load_initial(self) -> None:
         self._publish_broker_id = self.settings.selected_broker_id
@@ -526,28 +691,42 @@ class RadarApp:
             self._add_topic_row(topic.name, topic.enabled)
 
     def _add_topic_row(self, name: str, enabled: bool) -> None:
-        row = tk.Frame(self.topics_list, bg="white")
+        row = tk.Frame(self.topics_list, bg=self.theme.field)
+        row.radar_role = "field"
         row.pack(fill="x", padx=4, pady=1)
         variable = tk.BooleanVar(value=enabled)
-        check = ttk.Checkbutton(row, variable=variable, command=lambda: self._toggle_topic(name))
+        check = ttk.Checkbutton(row, variable=variable, style="Field.TCheckbutton", command=lambda: self._toggle_topic(name))
         check.pack(side="left")
-        label = tk.Label(row, text=name, bg="white", fg=INK if enabled else MUTED, anchor="w", font=("Segoe UI", 10))
+        label = tk.Label(
+            row,
+            text=name,
+            bg=self.theme.field,
+            fg=self.theme.ink if enabled else self.theme.muted,
+            anchor="w",
+            font=("Segoe UI", 10),
+        )
+        label.radar_role = "topic"
+        label.radar_enabled = variable
         label.pack(side="left", fill="x", expand=True, padx=(4, 8))
         remove = tk.Button(
             row,
             text="×",
             command=lambda: self._remove_topic(name),
-            bg="white",
-            fg=MUTED,
-            activebackground="white",
-            activeforeground=ERROR,
+            bg=self.theme.field,
+            fg=self.theme.muted,
+            activebackground=self.theme.field,
+            activeforeground=self.theme.error,
             relief="flat",
             bd=0,
             padx=4,
             cursor="hand2",
         )
+        remove.radar_role = "danger-button"
         remove.pack(side="right")
-        variable.trace_add("write", lambda *_args: label.configure(fg=INK if variable.get() else MUTED))
+        variable.trace_add(
+            "write",
+            lambda *_args: label.configure(fg=self.theme.ink if variable.get() else self.theme.muted),
+        )
         self._topic_rows.append((row, name, variable, check, remove))
         self._fit_topics()
 
@@ -773,7 +952,7 @@ class RadarApp:
         self._message_count = 0
         self.count_label.configure(text="0 mensajes")
         self._set_listening_ui(True)
-        self._set_status("Conectando…", WARN)
+        self._set_status("Conectando…", "warn")
         self._log(f"Conectando a {broker.host}:{broker.port}", "info")
         threading.Thread(target=self._connect, args=(broker,), daemon=True).start()
 
@@ -890,7 +1069,7 @@ class RadarApp:
         self.listening = False
         self._shutdown_client()
         self._set_listening_ui(False)
-        self._set_status("Detenido", MUTED)
+        self._set_status("Detenido", "muted")
         self._log("Escucha detenida", "info")
 
     def _shutdown_client(self) -> None:
@@ -919,12 +1098,12 @@ class RadarApp:
         kind = event[0]
         if kind == "listening":
             topics = ", ".join(event[1])
-            self._set_status("Escuchando", OK)
+            self._set_status("Escuchando", "ok")
             self._log(f"Conectado. Escuchando: {topics}", "info")
         elif kind == "message":
             self._show_message(event[1], event[2])
         elif kind == "reconnecting":
-            self._set_status("Reconectando…", WARN)
+            self._set_status("Reconectando…", "warn")
             self._log(f"Se cortó la conexión ({event[1]}). Reintentando…", "error")
         elif kind == "topic_rejected":
             self._log(f"El broker rechazó «{event[1]}». Se deja de escuchar ese tópico.", "error")
@@ -933,17 +1112,17 @@ class RadarApp:
             self.listening = False
             self._shutdown_client()
             self._set_listening_ui(False)
-            self._set_status("Detenido", ERROR)
+            self._set_status("Detenido", "error")
             self._log("El broker rechazó todos los tópicos.", "error")
         elif kind == "broker_error":
-            self._set_status("Reconectando…", WARN)
+            self._set_status("Reconectando…", "warn")
             self._log(event[1], "error")
         elif kind == "failed":
             self._user_stop = True
             self.listening = False
             self._shutdown_client()
             self._set_listening_ui(False)
-            self._set_status("Detenido", ERROR)
+            self._set_status("Detenido", "error")
             self._log(f"No se pudo conectar: {event[1]}", "error")
         elif kind == "published":
             retained = " retenido" if event[3] else ""
@@ -970,9 +1149,9 @@ class RadarApp:
 
     def _set_listening_ui(self, listening: bool) -> None:
         if listening:
-            self.listen_button.configure(text="Detener", bg=ERROR, activebackground="#7E2C26")
+            self.listen_button.configure(text="Detener", bg=self.theme.stop, activebackground=self.theme.stop_dark)
         else:
-            self.listen_button.configure(text="Comenzar a escuchar", bg=BROWN, activebackground=BROWN_DARK)
+            self.listen_button.configure(text="Comenzar a escuchar", bg=self.theme.button, activebackground=self.theme.button_dark)
         state = "disabled" if listening else "normal"
         combo_state = "disabled" if listening else "readonly"
         self.broker_combo.configure(state=combo_state)
@@ -989,8 +1168,9 @@ class RadarApp:
         self.save_broker_button.configure(state=state)
         self.delete_broker_button.configure(state=state)
 
-    def _set_status(self, text: str, color: str) -> None:
-        self.status_label.configure(text=text, fg=color)
+    def _set_status(self, text: str, role: str) -> None:
+        self._status_role = role
+        self.status_label.configure(text=text, fg=getattr(self.theme, role))
 
     def _notice(self, text: str) -> None:
         self.notice_label.configure(text=text)
@@ -1033,16 +1213,17 @@ class RadarApp:
             self.log,
             text="Copiar",
             font=("Segoe UI", 8),
-            fg=BROWN,
-            bg="white",
-            activeforeground=BROWN_DARK,
-            activebackground="#EFEAE4",
+            fg=self.theme.accent,
+            bg=self.theme.field,
+            activeforeground=self.theme.accent_dark,
+            activebackground=self.theme.copy_active,
             relief="flat",
             bd=1,
             padx=6,
             pady=0,
             cursor="hand2",
         )
+        button.radar_role = "field-button"
         button.configure(command=lambda payload=text, widget=button: self._copy_payload(payload, widget))
         self._copy_buttons.append(button)
         self.log.window_create("end", window=button)

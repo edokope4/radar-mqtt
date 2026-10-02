@@ -49,6 +49,7 @@ class Settings:
     payloads: list[SavedPayload] = field(default_factory=list)
     selected_broker_id: str = ""
     only_saved_payloads: bool = False
+    dark: bool = True
 
 
 def default_settings() -> Settings:
@@ -122,6 +123,7 @@ def settings_document(settings: Settings) -> dict:
         "payloads": [asdict(item) for item in settings.payloads],
         "selected_broker_id": settings.selected_broker_id,
         "only_saved_payloads": settings.only_saved_payloads,
+        "dark": settings.dark,
     }
 
 
@@ -152,6 +154,7 @@ def settings_from_document(raw: object) -> Settings:
         payloads=payloads,
         selected_broker_id=str(raw.get("selected_broker_id") or ""),
         only_saved_payloads=bool(raw.get("only_saved_payloads")),
+        dark=bool(raw.get("dark", True)),
     )
     if settings.selected_broker_id not in {broker.id for broker in settings.brokers}:
         settings.selected_broker_id = settings.brokers[0].id
