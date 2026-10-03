@@ -8,13 +8,14 @@ import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 import tkinter as tk
 
 import paho.mqtt.client as mqtt
 
 from radar_mqtt.storage import (
     Broker,
+    FavoriteMessage,
     Settings,
     Topic,
     enabled_topic_names,
@@ -484,6 +485,21 @@ class RadarApp:
         self.publish_payload.radar_role = "field"
         self.publish_payload.grid(row=4, column=0, columnspan=2, sticky="nsew")
 
+        ttk.Label(frame, text="Favoritos").grid(row=5, column=0, sticky="w", pady=(8, 4))
+        favorites = tk.Frame(frame, bg=self.theme.bg)
+        favorites.radar_role = "panel"
+        favorites.grid(row=5, column=1, sticky="ew", pady=(8, 4))
+        favorites.columnconfigure(0, weight=1)
+        self.favorite_combo = ttk.Combobox(favorites, state="readonly")
+        self.favorite_combo.grid(row=0, column=0, sticky="ew")
+        ttk.Button(favorites, text="Cargar", command=self.load_favorite).grid(row=0, column=1, padx=(8, 0))
+
+        favorite_actions = tk.Frame(frame, bg=self.theme.bg)
+        favorite_actions.radar_role = "panel"
+        favorite_actions.grid(row=6, column=0, columnspan=2, sticky="ew")
+        ttk.Button(favorite_actions, text="Guardar en favoritos", command=self.save_favorite).pack(side="left")
+        ttk.Button(favorite_actions, text="Quitar", command=self.delete_favorite).pack(side="left", padx=8)
+
         self.publish_button = tk.Button(
             frame,
             text="Publicar",
@@ -499,7 +515,7 @@ class RadarApp:
             cursor="hand2",
         )
         self.publish_button.radar_role = "primary"
-        self.publish_button.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        self.publish_button.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(10, 0))
 
     def _build_listen_bar(self) -> None:
         bar = tk.Frame(self.root, bg=self.theme.bg)
@@ -574,6 +590,7 @@ class RadarApp:
             self._select_broker(self.settings.brokers[0])
         else:
             self.new_broker()
+        self._refresh_favorites()
 
     def _broker_by_id(self, broker_id: str) -> Broker | None:
         for broker in self.settings.brokers:
@@ -628,6 +645,96 @@ class RadarApp:
             raise ValueError("El QoS tiene que ser 0, 1 o 2.")
         payload = self.publish_payload.get("1.0", "end-1c")
         return broker, topic, payload, qos, bool(self.publish_retain_var.get())
+
+    def _selected_favorite(self) -> FavoriteMessage | None:
+        index = self.favorite_combo.current()
+        if index < 0 or index >= len(self.settings.favorites):
+            return None
+        return self.settings.favorites[index]
+
+    def _refresh_favorites(self, select_id: str = "") -> None:
+        self.favorite_combo.configure(values=[item.name for item in self.settings.favorites])
+        chosen = next((item for item in self.settings.favorites if item.id == select_id), None)
+        if chosen is None:
+            self.favorite_combo.set("")
+            return
+        self.favorite_combo.current(self.settings.favorites.index(chosen))
+
+    def save_favorite(self) -> None:
+        try:
+            broker, topic, payload, qos, retain = self._read_publish()
+        except ValueError as error:
+            messagebox.showwarning("Radar MQTT", str(error))
+            return
+        name = simpledialog.askstring("Radar MQTT", "Nombre del favorito:", parent=self.root)
+        if name is None:
+            return
+        name = name.strip()
+        if not name:
+            messagebox.showwarning("Radar MQTT", "Escribe un nombre para el favorito.")
+            return
+        existing = next((item for item in self.settings.favorites if item.name == name), None)
+        if existing is not None:
+            replace = messagebox.askyesno(
+                "Radar MQTT",
+                "Ya existe un favorito con ese nombre. ¿Reemplazarlo?",
+            )
+            if not replace:
+                return
+            existing.broker_id = broker.id
+            existing.topic = topic
+            existing.body = payload
+            existing.qos = qos
+            existing.retain = retain
+            saved_id = existing.id
+        else:
+            saved = FavoriteMessage(
+                id=str(uuid.uuid4()),
+                name=name,
+                broker_id=broker.id,
+                topic=topic,
+                body=payload,
+                qos=qos,
+                retain=retain,
+            )
+            self.settings.favorites.append(saved)
+            saved_id = saved.id
+        save_settings(self.settings)
+        self._refresh_favorites(saved_id)
+        self._notice(f"Favorito guardado: {name}")
+
+    def load_favorite(self) -> None:
+        favorite = self._selected_favorite()
+        if favorite is None:
+            messagebox.showwarning("Radar MQTT", "Elige un favorito.")
+            return
+        self.publish_topic_var.set(favorite.topic)
+        self.publish_qos_var.set(str(favorite.qos))
+        self.publish_retain_var.set(favorite.retain)
+        self.publish_payload.delete("1.0", "end")
+        self.publish_payload.insert("1.0", favorite.body)
+        broker = self._broker_by_id(favorite.broker_id)
+        if broker is not None:
+            self._publish_broker_id = broker.id
+            self._refresh_publish_brokers()
+        elif favorite.broker_id:
+            messagebox.showwarning(
+                "Radar MQTT",
+                "El broker de este favorito ya no está guardado. Se cargó el resto del mensaje.",
+            )
+        self._notice(f"Favorito cargado: {favorite.name}")
+
+    def delete_favorite(self) -> None:
+        favorite = self._selected_favorite()
+        if favorite is None:
+            messagebox.showwarning("Radar MQTT", "Elige un favorito.")
+            return
+        if not messagebox.askyesno("Radar MQTT", f"¿Quitar el favorito «{favorite.name}»?"):
+            return
+        self.settings.favorites = [item for item in self.settings.favorites if item.id != favorite.id]
+        save_settings(self.settings)
+        self._refresh_favorites()
+        self._notice(f"Favorito quitado: {favorite.name}")
 
     def publish_message(self) -> None:
         if self._publishing:
@@ -895,6 +1002,7 @@ class RadarApp:
         selected = self._broker_by_id(settings.selected_broker_id)
         if selected is not None:
             self._select_broker(selected)
+        self._refresh_favorites()
         self._notice("Configuración importada")
 
     def save_broker(self) -> None:

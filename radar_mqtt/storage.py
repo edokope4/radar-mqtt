@@ -44,9 +44,21 @@ class SavedPayload:
 
 
 @dataclass
+class FavoriteMessage:
+    id: str
+    name: str
+    broker_id: str
+    topic: str
+    body: str
+    qos: int = 0
+    retain: bool = False
+
+
+@dataclass
 class Settings:
     brokers: list[Broker] = field(default_factory=list)
     payloads: list[SavedPayload] = field(default_factory=list)
+    favorites: list[FavoriteMessage] = field(default_factory=list)
     selected_broker_id: str = ""
     only_saved_payloads: bool = False
     dark: bool = True
@@ -117,10 +129,31 @@ def _payload_from_dict(raw: dict) -> SavedPayload:
     return SavedPayload(id=str(raw.get("id") or uuid.uuid4()), name=name, body=body)
 
 
+def _favorite_from_dict(raw: dict) -> FavoriteMessage | None:
+    topic = str(raw.get("topic") or "").strip()
+    name = str(raw.get("name") or topic or "Favorito").strip()
+    if not topic or not name:
+        return None
+    try:
+        qos = int(raw.get("qos") or 0)
+    except (TypeError, ValueError):
+        qos = 0
+    return FavoriteMessage(
+        id=str(raw.get("id") or uuid.uuid4()),
+        name=name,
+        broker_id=str(raw.get("broker_id") or ""),
+        topic=topic,
+        body=str(raw.get("body") or ""),
+        qos=max(0, min(2, qos)),
+        retain=bool(raw.get("retain")),
+    )
+
+
 def settings_document(settings: Settings) -> dict:
     return {
         "brokers": [asdict(broker) for broker in settings.brokers],
         "payloads": [asdict(item) for item in settings.payloads],
+        "favorites": [asdict(item) for item in settings.favorites],
         "selected_broker_id": settings.selected_broker_id,
         "only_saved_payloads": settings.only_saved_payloads,
         "dark": settings.dark,
@@ -149,9 +182,18 @@ def settings_from_document(raw: object) -> Settings:
         for item in payloads_raw
         if isinstance(item, dict) and str(item.get("body") or "").strip()
     ]
+    favorites_raw = raw.get("favorites", [])
+    if not isinstance(favorites_raw, list):
+        raise ValueError("El archivo no tiene una configuración válida.")
+    favorites = [
+        favorite
+        for item in favorites_raw
+        if isinstance(item, dict) and (favorite := _favorite_from_dict(item)) is not None
+    ]
     settings = Settings(
         brokers=brokers,
         payloads=payloads,
+        favorites=favorites,
         selected_broker_id=str(raw.get("selected_broker_id") or ""),
         only_saved_payloads=bool(raw.get("only_saved_payloads")),
         dark=bool(raw.get("dark", True)),
