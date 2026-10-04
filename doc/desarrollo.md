@@ -16,11 +16,12 @@ No se conecta al abrirse. Hay que pulsar **Comenzar a escuchar**.
 - Payloads guardados con nombre. Si el texto del mensaje coincide, el registro lo marca con ese nombre. **Mostrar solo estos payloads** oculta el resto.
 - Ventana de publicación: broker, tópico, QoS, retain y cuerpo del mensaje.
 - Favoritos de publicación. Guardan nombre, broker, tópico, cuerpo, QoS y retain. **Guardar en favoritos** pide el nombre y, si ya existe, pregunta si se reemplaza. **Cargar** rellena el formulario. **Quitar** borra el favorito elegido. Si el broker de ese favorito ya no existe, se carga el resto y se avisa.
+- Registro SQLite del último mes. Cada mensaje recibido guarda `fecha_recepcion`, `topico`, `payload` y `qos` en la tabla `INBOX`. Lo más viejo que un mes calendario se borra al guardar o al abrir la lista. El botón **INBOX** abre otra ventana con la tabla; al elegir una fila se ve el payload completo. La ventana principal sigue mostrando solo el registro en vivo.
 - Tema oscuro, guardado en la configuración. También se puede exportar e importar el JSON de ajustes.
 
 ## Dónde se guardan los datos
 
-`%APPDATA%\RadarMqtt\config.json`. No está en el repositorio.
+`%APPDATA%\RadarMqtt\config.json` guarda brokers, payloads y favoritos. `%APPDATA%\RadarMqtt\inbox.db` guarda la tabla `INBOX`. Ninguno de los dos está en el repositorio.
 
 Una configuración vieja, sin la clave `favorites`, se abre con la lista de favoritos vacía.
 
@@ -52,7 +53,7 @@ cd C:\develop\radar-mqtt
 
 `build.bat` crea `.venv`, instala las dependencias y genera `dist\RadarMqtt.exe` con PyInstaller. Si el exe está abierto, el empaquetado no puede reemplazarlo. Hay que cerrar Radar MQTT y volver a ejecutar `build.bat`. El exe que quedó de una compilación anterior no incluye los favoritos hasta que se regenere.
 
-Código: `main.py`, `radar_mqtt/app.py`, `radar_mqtt/storage.py`.
+Código: `main.py`, `radar_mqtt/app.py`, `radar_mqtt/storage.py`, `radar_mqtt/inbox.py`. La retención del mes se prueba con `py -3 -m unittest discover -s tests`.
 
 ## Pendiente
 

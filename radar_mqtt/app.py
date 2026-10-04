@@ -4,6 +4,7 @@ import ctypes
 import json
 import os
 import queue
+import sqlite3
 import threading
 import uuid
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ import tkinter as tk
 
 import paho.mqtt.client as mqtt
 
+from radar_mqtt.inbox import InboxStore
 from radar_mqtt.storage import (
     Broker,
     FavoriteMessage,
@@ -201,6 +203,12 @@ class RadarApp:
         self._publishing = False
         self.theme = DARK if settings.dark else LIGHT
         self._status_role = "muted"
+        self.inbox = InboxStore()
+        self._inbox_window: tk.Toplevel | None = None
+        self._inbox_tree: ttk.Treeview | None = None
+        self._inbox_detail: tk.Text | None = None
+        self._inbox_count: tk.Label | None = None
+        self._inbox_payloads: dict[str, str] = {}
 
         self.root = tk.Tk()
         self.root.radar_role = "panel"
@@ -237,6 +245,25 @@ class RadarApp:
         style.configure("Field.TCheckbutton", background=theme.field, foreground=theme.ink)
         style.map("Field.TCheckbutton", background=[("active", theme.field)])
         style.configure("Muted.TLabel", background=theme.bg, foreground=theme.muted)
+        style.configure(
+            "Inbox.Treeview",
+            background=theme.field,
+            fieldbackground=theme.field,
+            foreground=theme.ink,
+            borderwidth=0,
+            rowheight=26,
+        )
+        style.configure(
+            "Inbox.Treeview.Heading",
+            background=theme.bg,
+            foreground=theme.accent,
+            relief="flat",
+        )
+        style.map(
+            "Inbox.Treeview",
+            background=[("selected", theme.button)],
+            foreground=[("selected", "white")],
+        )
 
     def _toggle_theme(self) -> None:
         self.settings.dark = bool(self.dark_var.get())
@@ -551,6 +578,7 @@ class RadarApp:
         self.count_label.radar_role = "muted"
         self.count_label.pack(side="left")
         ttk.Button(top, text="Limpiar", command=self.clear_log).pack(side="right")
+        ttk.Button(top, text="INBOX", command=self.open_inbox).pack(side="right", padx=(0, 8))
 
         self.log = tk.Text(
             frame,
@@ -1154,7 +1182,7 @@ class RadarApp:
             text = message.payload.decode("utf-8")
         except UnicodeDecodeError:
             text = message.payload.hex()
-        self.events.put(("message", message.topic, text))
+        self.events.put(("message", message.topic, text, int(getattr(message, "qos", 0))))
 
     def _on_disconnect(self, _client: mqtt.Client, _userdata: object, _flags: object, reason_code: object, _properties: object) -> None:
         if self._user_stop:
@@ -1209,7 +1237,7 @@ class RadarApp:
             self._set_status("Escuchando", "ok")
             self._log(f"Conectado. Escuchando: {topics}", "info")
         elif kind == "message":
-            self._show_message(event[1], event[2])
+            self._show_message(event[1], event[2], event[3])
         elif kind == "reconnecting":
             self._set_status("Reconectando…", "warn")
             self._log(f"Se cortó la conexión ({event[1]}). Reintentando…", "error")
@@ -1241,7 +1269,13 @@ class RadarApp:
             self._publishing = False
             self.publish_button.configure(state="normal", text="Publicar")
 
-    def _show_message(self, topic: str, payload: str) -> None:
+    def _show_message(self, topic: str, payload: str, qos: int) -> None:
+        try:
+            self.inbox.record(topic, payload, qos)
+        except sqlite3.Error as error:
+            self._log(f"No se pudo guardar en INBOX: {error}", "error")
+        else:
+            self._reload_inbox()
         matched = match_payload(payload, self.settings.payloads)
         self._message_count += 1
         noun = "mensaje" if self._message_count == 1 else "mensajes"
@@ -1407,6 +1441,131 @@ class RadarApp:
         self._message_count = 0
         self.count_label.configure(text="0 mensajes")
 
+    def open_inbox(self) -> None:
+        if self._inbox_window is not None and self._inbox_window.winfo_exists():
+            self._inbox_window.lift()
+            self._reload_inbox()
+            return
+        theme = self.theme
+        window = tk.Toplevel(self.root)
+        window.radar_role = "panel"
+        window.title("INBOX")
+        window.geometry("980x560")
+        window.minsize(720, 420)
+        window.configure(bg=theme.bg)
+        window.columnconfigure(0, weight=1)
+        window.rowconfigure(1, weight=1)
+        self._inbox_window = window
+
+        bar = tk.Frame(window, bg=theme.bg)
+        bar.radar_role = "panel"
+        bar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=16, pady=(14, 8))
+        count = tk.Label(bar, text="", bg=theme.bg, fg=theme.muted, font=("Segoe UI", 10))
+        count.radar_role = "muted"
+        count.pack(side="left")
+        self._inbox_count = count
+        ttk.Button(bar, text="Actualizar", command=self._reload_inbox).pack(side="right")
+
+        tree = ttk.Treeview(
+            window,
+            columns=("fecha_recepcion", "topico", "payload", "qos"),
+            show="headings",
+            style="Inbox.Treeview",
+        )
+        tree.heading("fecha_recepcion", text="fecha_recepcion")
+        tree.heading("topico", text="topico")
+        tree.heading("payload", text="payload")
+        tree.heading("qos", text="qos")
+        tree.column("fecha_recepcion", width=160, minwidth=140, stretch=False)
+        tree.column("topico", width=240, minwidth=120, stretch=False)
+        tree.column("payload", width=460, minwidth=160, stretch=True)
+        tree.column("qos", width=50, minwidth=40, stretch=False, anchor="center")
+        tree.grid(row=1, column=0, sticky="nsew", padx=(16, 0), pady=(0, 8))
+        tree.bind("<<TreeviewSelect>>", self._show_inbox_payload)
+        scroll_y = ttk.Scrollbar(window, orient="vertical", command=tree.yview)
+        scroll_y.grid(row=1, column=1, sticky="ns", padx=(0, 16), pady=(0, 8))
+        tree.configure(yscrollcommand=scroll_y.set)
+        self._inbox_tree = tree
+
+        detail = tk.Text(
+            window,
+            height=6,
+            wrap="word",
+            font=("Consolas", 10),
+            bg=theme.field,
+            fg=theme.ink,
+            insertbackground=theme.ink,
+            relief="flat",
+            padx=8,
+            pady=8,
+            cursor="xterm",
+        )
+        detail.radar_role = "field"
+        detail.grid(row=2, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 16))
+        detail.configure(state="disabled")
+        detail.bind("<Key>", self._guard_log)
+        self._inbox_detail = detail
+        window.protocol("WM_DELETE_WINDOW", self._close_inbox)
+        self._reload_inbox()
+
+    def _close_inbox(self) -> None:
+        window = self._inbox_window
+        self._inbox_window = None
+        self._inbox_tree = None
+        self._inbox_detail = None
+        self._inbox_count = None
+        self._inbox_payloads = {}
+        if window is not None and window.winfo_exists():
+            window.destroy()
+
+    def _reload_inbox(self) -> None:
+        tree = self._inbox_tree
+        if tree is None or not tree.winfo_exists():
+            return
+        try:
+            rows = self.inbox.list_messages()
+        except sqlite3.Error as error:
+            self._log(f"No se pudo leer INBOX: {error}", "error")
+            return
+        children = tree.get_children()
+        if children:
+            tree.delete(*children)
+        self._inbox_payloads = {}
+        for row in rows:
+            preview = " ".join(row.payload.split())
+            if len(preview) > 120:
+                preview = preview[:117] + "..."
+            item = tree.insert(
+                "",
+                "end",
+                values=(row.fecha_recepcion, row.topico, preview, row.qos),
+            )
+            self._inbox_payloads[item] = row.payload
+        if self._inbox_count is not None and self._inbox_count.winfo_exists():
+            noun = "mensaje" if len(rows) == 1 else "mensajes"
+            self._inbox_count.configure(text=f"{len(rows)} {noun} del último mes")
+        self._set_inbox_detail("")
+
+    def _show_inbox_payload(self, _event: object = None) -> None:
+        tree = self._inbox_tree
+        if tree is None:
+            return
+        selected = tree.selection()
+        if not selected:
+            self._set_inbox_detail("")
+            return
+        self._set_inbox_detail(self._inbox_payloads.get(selected[0], ""))
+
+    def _set_inbox_detail(self, text: str) -> None:
+        detail = self._inbox_detail
+        if detail is None or not detail.winfo_exists():
+            return
+        detail.configure(state="normal")
+        detail.delete("1.0", "end")
+        if text:
+            detail.insert("1.0", text)
+        detail.configure(state="disabled")
+
     def _now(self) -> str:
         return datetime.now().strftime("%H:%M:%S")
 
@@ -1414,6 +1573,7 @@ class RadarApp:
         self._user_stop = True
         self.listening = False
         self._shutdown_client()
+        self.inbox.close()
         try:
             broker = self.read_form()
         except ValueError:
