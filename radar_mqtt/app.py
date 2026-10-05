@@ -1502,7 +1502,7 @@ class RadarApp:
         tree.heading("topico", text="topico")
         tree.heading("payload", text="payload")
         tree.heading("qos", text="qos")
-        tree.column("fecha_recepcion", width=160, minwidth=140, stretch=False)
+        tree.column("fecha_recepcion", width=200, minwidth=180, stretch=False)
         tree.column("topico", width=240, minwidth=120, stretch=False)
         tree.column("payload", width=460, minwidth=160, stretch=True)
         tree.column("qos", width=50, minwidth=40, stretch=False, anchor="center")

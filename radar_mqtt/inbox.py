@@ -8,7 +8,9 @@ from pathlib import Path
 
 from radar_mqtt.storage import app_dir
 
-STAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+def format_stamp(moment: datetime) -> str:
+    return moment.strftime("%Y-%m-%d %H:%M:%S.") + f"{moment.microsecond // 1000:03d}"
 
 
 @dataclass(frozen=True)
@@ -69,7 +71,7 @@ class InboxStore:
         stored_qos = max(0, min(2, int(qos)))
         self._conn.execute(
             "INSERT INTO INBOX (fecha_recepcion, topico, payload, qos) VALUES (?, ?, ?, ?)",
-            (moment.strftime(STAMP_FORMAT), topico, payload, stored_qos),
+            (format_stamp(moment), topico, payload, stored_qos),
         )
         self._purge(current)
         self._conn.commit()
@@ -97,5 +99,5 @@ class InboxStore:
         ]
 
     def _purge(self, now: datetime) -> None:
-        cutoff = month_ago(now).strftime(STAMP_FORMAT)
+        cutoff = format_stamp(month_ago(now))
         self._conn.execute("DELETE FROM INBOX WHERE fecha_recepcion < ?", (cutoff,))

@@ -31,7 +31,7 @@ class InboxStoreTest(unittest.TestCase):
         self.store.record("cl/kope/iot/cafetera/alive", '{"status": "alive"}', 1, now=self.now)
         rows = self.store.list_messages(self.now)
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0].fecha_recepcion, "2026-10-03 12:00:00")
+        self.assertEqual(rows[0].fecha_recepcion, "2026-10-03 12:00:00.000")
         self.assertEqual(rows[0].topico, "cl/kope/iot/cafetera/alive")
         self.assertEqual(rows[0].payload, '{"status": "alive"}')
         self.assertEqual(rows[0].qos, 1)
@@ -43,3 +43,9 @@ class InboxStoreTest(unittest.TestCase):
         rows = self.store.list_messages(self.now)
         self.assertEqual([row.payload for row in rows], ["ultimo", "queda"])
         self.assertEqual([row.topico for row in rows], ["nuevo", "borde"])
+
+    def test_stores_milliseconds(self) -> None:
+        moment = datetime(2026, 10, 3, 12, 0, 0, 123456)
+        self.store.record("topico", "payload", 0, received_at=moment, now=self.now)
+        rows = self.store.list_messages(self.now)
+        self.assertEqual(rows[0].fecha_recepcion, "2026-10-03 12:00:00.123")
