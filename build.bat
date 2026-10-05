@@ -4,7 +4,7 @@ py -3 -m venv .venv
 if errorlevel 1 goto fail
 call .venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
 if errorlevel 1 goto fail
-call .venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --onefile --windowed --name RadarMqtt main.py
+call .venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --onefile --windowed --name RadarMqtt --icon radar.ico --add-data "radar.png;." main.py
 if errorlevel 1 goto fail
 echo.
 echo Ejecutable listo: dist\RadarMqtt.exe

@@ -4,6 +4,7 @@ import ctypes
 import json
 import os
 import queue
+import sys
 import sqlite3
 import threading
 import uuid
@@ -181,6 +182,35 @@ def json_tokens(text: str) -> list[tuple[str, str]]:
     return tokens
 
 
+def icon_file(name: str) -> str:
+    if getattr(sys, "frozen", False):
+        base = getattr(sys, "_MEIPASS", "")
+    else:
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, name)
+
+
+def apply_icon(window: tk.Misc) -> None:
+    png = icon_file("radar.png")
+    if os.path.isfile(png):
+        try:
+            image = tk.PhotoImage(file=png)
+        except tk.TclError:
+            image = None
+        if image is not None:
+            window.iconphoto(True, image)
+            window._radar_icon = image
+            return
+    ico = icon_file("radar.ico")
+    if not os.path.isfile(ico):
+        return
+    try:
+        window.iconbitmap(default=ico)
+        window.iconbitmap(ico)
+    except tk.TclError:
+        return
+
+
 def enable_dpi() -> None:
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
@@ -231,6 +261,7 @@ class RadarApp:
         self.root = tk.Tk()
         self.root.radar_role = "panel"
         self.root.title("Radar MQTT")
+        apply_icon(self.root)
         self.root.geometry("1040x740")
         self.root.minsize(900, 640)
         self.root.configure(bg=self.theme.bg)
@@ -1628,6 +1659,7 @@ class RadarApp:
         window = tk.Toplevel(self.root)
         window.radar_role = "panel"
         window.title("Archivo")
+        apply_icon(window)
         window.geometry("980x720")
         window.minsize(720, 520)
         window.configure(bg=theme.bg)
