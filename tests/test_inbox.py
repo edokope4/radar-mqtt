@@ -49,3 +49,17 @@ class InboxStoreTest(unittest.TestCase):
         self.store.record("topico", "payload", 0, received_at=moment, now=self.now)
         rows = self.store.list_messages(self.now)
         self.assertEqual(rows[0].fecha_recepcion, "2026-10-03 12:00:00.123")
+
+    def test_deletes_one_message(self) -> None:
+        self.store.record("a", "uno", 0, now=self.now)
+        self.store.record("b", "dos", 0, received_at=datetime(2026, 10, 3, 12, 0, 1), now=self.now)
+        rows = self.store.list_messages(self.now)
+        self.store.delete(rows[1].id)
+        left = self.store.list_messages(self.now)
+        self.assertEqual([row.payload for row in left], ["dos"])
+
+    def test_clears_all_messages(self) -> None:
+        self.store.record("a", "uno", 0, now=self.now)
+        self.store.record("b", "dos", 0, now=self.now)
+        self.store.clear()
+        self.assertEqual(self.store.list_messages(self.now), [])

@@ -98,6 +98,14 @@ class InboxStore:
             for row in rows
         ]
 
+    def delete(self, message_id: int) -> None:
+        self._conn.execute("DELETE FROM INBOX WHERE id = ?", (int(message_id),))
+        self._conn.commit()
+
+    def clear(self) -> None:
+        self._conn.execute("DELETE FROM INBOX")
+        self._conn.commit()
+
     def _purge(self, now: datetime) -> None:
         cutoff = format_stamp(month_ago(now))
         self._conn.execute("DELETE FROM INBOX WHERE fecha_recepcion < ?", (cutoff,))

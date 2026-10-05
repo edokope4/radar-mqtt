@@ -50,6 +50,8 @@ class Theme:
     json_null: str
     line: str
     copy_active: str
+    on_button: str
+    on_detail: str
 
 
 LIGHT = Theme(
@@ -57,45 +59,49 @@ LIGHT = Theme(
     field="#FFFFFF",
     ink="#2C211C",
     muted="#8A7568",
-    accent="#6F4E37",
-    accent_dark="#5C3A2E",
-    button="#6F4E37",
-    button_dark="#5C3A2E",
+    accent="#6577E2",
+    accent_dark="#4C5CB8",
+    button="#6577E2",
+    button_dark="#4C5CB8",
     ok="#2E7D4F",
     warn="#C47A3A",
     error="#A33B32",
     stop="#A33B32",
     stop_dark="#7E2C26",
-    json_key="#6F4E37",
+    json_key="#6577E2",
     json_str="#1B7A4E",
-    json_num="#B86E2A",
-    json_bool="#3E6B9A",
+    json_num="#8F7A2A",
+    json_bool="#4C5CB8",
     json_null="#8A7568",
-    line="#E4DDD6",
-    copy_active="#EFEAE4",
+    line="#E2CF65",
+    copy_active="#F3EBC0",
+    on_button="#FFFFFF",
+    on_detail="#1C1808",
 )
 
 DARK = Theme(
-    bg="#161311",
-    field="#241E1A",
-    ink="#F6F1EC",
-    muted="#A8988C",
-    accent="#E0C4A8",
-    accent_dark="#C4A484",
-    button="#6F4E37",
-    button_dark="#5C3A2E",
+    bg="#12141C",
+    field="#1C2030",
+    ink="#F6F3EA",
+    muted="#A39EAE",
+    accent="#E2CF65",
+    accent_dark="#C6B44C",
+    button="#E2CF65",
+    button_dark="#C6B44C",
     ok="#7DCEA0",
     warn="#E0A15A",
     error="#E07A72",
     stop="#A33B32",
     stop_dark="#7E2C26",
-    json_key="#E0C4A8",
+    json_key="#E2CF65",
     json_str="#8FD0A8",
-    json_num="#F0B56B",
-    json_bool="#9EC1E8",
-    json_null="#A8988C",
-    line="#3A322C",
-    copy_active="#3A322C",
+    json_num="#9AABF0",
+    json_bool="#6577E2",
+    json_null="#A39EAE",
+    line="#6577E2",
+    copy_active="#2A3148",
+    on_button="#1C1808",
+    on_detail="#FFFFFF",
 )
 
 
@@ -220,6 +226,7 @@ class RadarApp:
         self._inbox_detail: tk.Text | None = None
         self._inbox_count: tk.Label | None = None
         self._inbox_payloads: dict[str, str] = {}
+        self._inbox_split: tk.PanedWindow | None = None
 
         self.root = tk.Tk()
         self.root.radar_role = "panel"
@@ -243,10 +250,31 @@ class RadarApp:
         style.configure(".", font=("Segoe UI", 10), background=theme.bg, foreground=theme.ink)
         style.configure("TFrame", background=theme.bg)
         style.configure("TLabel", background=theme.bg, foreground=theme.ink)
-        style.configure("TLabelframe", background=theme.bg, foreground=theme.accent)
+        style.configure(
+            "TLabelframe",
+            background=theme.bg,
+            foreground=theme.accent,
+            bordercolor=theme.line,
+            lightcolor=theme.line,
+            darkcolor=theme.line,
+        )
         style.configure("TLabelframe.Label", background=theme.bg, foreground=theme.accent, font=("Segoe UI", 11, "bold"))
-        style.configure("TButton", padding=(10, 6), background=theme.field, foreground=theme.ink)
-        style.map("TButton", background=[("active", theme.copy_active)])
+        style.configure(
+            "TButton",
+            padding=(10, 6),
+            background=theme.button,
+            foreground=theme.on_button,
+            bordercolor=theme.line,
+            lightcolor=theme.line,
+            darkcolor=theme.line,
+            focuscolor=theme.line,
+        )
+        style.map(
+            "TButton",
+            background=[("pressed", theme.button_dark), ("active", theme.button_dark), ("disabled", theme.field)],
+            foreground=[("disabled", theme.muted)],
+            bordercolor=[("focus", theme.accent), ("active", theme.line)],
+        )
         style.configure("TCheckbutton", background=theme.bg, foreground=theme.ink)
         style.map("TCheckbutton", background=[("active", theme.bg)])
         style.configure("TEntry", padding=4, fieldbackground=theme.field, foreground=theme.ink, bordercolor=theme.line)
@@ -266,14 +294,14 @@ class RadarApp:
         )
         style.configure(
             "Inbox.Treeview.Heading",
-            background=theme.bg,
-            foreground=theme.accent,
+            background=theme.line,
+            foreground=theme.on_detail,
             relief="flat",
         )
         style.map(
             "Inbox.Treeview",
             background=[("selected", theme.button)],
-            foreground=[("selected", "white")],
+            foreground=[("selected", theme.on_button)],
         )
 
     def _toggle_theme(self) -> None:
@@ -334,12 +362,16 @@ class RadarApp:
         elif role == "primary":
             widget.configure(
                 bg=theme.button,
-                fg="white",
+                fg=theme.on_button,
                 activebackground=theme.button_dark,
-                activeforeground="white",
+                activeforeground=theme.on_button,
+                highlightbackground=theme.line,
+                highlightcolor=theme.line,
             )
         elif role == "menu":
-            widget.configure(bg=theme.field, fg=theme.ink, activebackground=theme.button, activeforeground="white")
+            widget.configure(bg=theme.field, fg=theme.ink, activebackground=theme.button, activeforeground=theme.on_button)
+        elif role == "sash":
+            widget.configure(bg=theme.line)
         for child in widget.winfo_children():
             self._paint(child)
 
@@ -385,23 +417,115 @@ class RadarApp:
         self.notice_label.radar_role = "notice"
         self.notice_label.pack(side="right")
 
-        body = tk.Frame(self.root, bg=self.theme.bg)
-        body.radar_role = "panel"
-        body.radar_role = "panel"
-        body.pack(fill="both", expand=False, padx=16, pady=4)
-        body.columnconfigure(0, weight=3)
-        body.columnconfigure(1, weight=2)
-        body.rowconfigure(0, weight=1)
+        self._rows = self._paned(self.root, tk.VERTICAL)
+        self._rows.pack(fill="both", expand=True, padx=16, pady=(4, 14))
+        top = tk.Frame(self._rows, bg=self.theme.bg)
+        top.radar_role = "panel"
+        self._top_pane = top
+        self._columns = self._paned(top, tk.HORIZONTAL)
+        self._build_listen_bar(top)
+        self._columns.pack(fill="both", expand=True)
+        self._columns.add(self._build_broker(self._columns), stretch="always", minsize=340)
+        self._columns.add(self._build_publish(self._columns), stretch="always", minsize=280)
+        self._rows.add(top, stretch="never", minsize=280)
+        self._rows.add(self._build_log(self._rows), stretch="always", minsize=160)
+        self._sashes_ready = False
+        self._sash_bind = self.root.bind("<Configure>", self._place_sashes, add="+")
+        self.root.bind_all("<MouseWheel>", self._on_mouse_wheel)
 
-        self._build_broker(body)
-        self._build_publish(body)
-        self._build_listen_bar()
-        self._build_log()
+    def _paned(self, parent: tk.Misc, orient: str) -> tk.PanedWindow:
+        pane = tk.PanedWindow(
+            parent,
+            orient=orient,
+            sashwidth=8,
+            sashrelief="flat",
+            sashcursor="sb_h_double_arrow" if orient == tk.HORIZONTAL else "sb_v_double_arrow",
+            opaqueresize=True,
+            bd=0,
+            relief="flat",
+            bg=self.theme.line,
+        )
+        pane.radar_role = "sash"
+        return pane
 
-    def _build_broker(self, parent: tk.Frame) -> None:
-        frame = ttk.LabelFrame(parent, text="Brokers", padding=12)
-        frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+    def _place_sashes(self, _event: object = None) -> None:
+        if self._sashes_ready:
+            return
+        width = self._columns.winfo_width()
+        height = self._rows.winfo_height()
+        if self.root.winfo_width() < 800 or width < 40 or height < 40:
+            return
+        self._sashes_ready = True
+        self.root.unbind("<Configure>", self._sash_bind)
+        self._columns.sash_place(0, max(340, int(width * 0.58)), 1)
+        top = min(self._top_pane.winfo_reqheight(), height - 160)
+        self._rows.sash_place(0, 1, max(280, top))
+
+    def _scrollable(self, parent: tk.Misc) -> tuple[tk.Frame, tk.Frame]:
+        shell = tk.Frame(parent, bg=self.theme.bg)
+        shell.radar_role = "panel"
+        shell.columnconfigure(0, weight=1)
+        shell.rowconfigure(0, weight=1)
+        canvas = tk.Canvas(shell, bg=self.theme.bg, highlightthickness=0, bd=0)
+        canvas.radar_role = "panel"
+        bar = ttk.Scrollbar(shell, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=bar.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        bar.grid(row=0, column=1, sticky="ns")
+        inner = tk.Frame(canvas, bg=self.theme.bg)
+        inner.radar_role = "panel"
+        window = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def sync(_event: object = None) -> None:
+            if getattr(canvas, "_radar_syncing", False) or not canvas.winfo_exists():
+                return
+            width = canvas.winfo_width()
+            view_h = canvas.winfo_height()
+            if width <= 1 or view_h <= 1:
+                return
+            canvas._radar_syncing = True
+            try:
+                canvas.update_idletasks()
+                needed = inner.winfo_reqheight()
+                height = max(needed, view_h)
+                try:
+                    current_w = int(float(canvas.itemcget(window, "width")))
+                    current_h = int(float(canvas.itemcget(window, "height")))
+                except ValueError:
+                    current_w = 0
+                    current_h = 0
+                if current_w != width or current_h != height:
+                    canvas.itemconfigure(window, width=width, height=height)
+                canvas.configure(scrollregion=(0, 0, width, height))
+            finally:
+                canvas._radar_syncing = False
+
+        inner.bind("<Configure>", sync)
+        canvas.bind("<Configure>", sync)
+        canvas.radar_scroll = lambda event: canvas.yview_scroll(int(-event.delta / 120), "units")
+        return shell, inner
+
+    def _on_mouse_wheel(self, event: tk.Event) -> str | None:
+        widget = event.widget
+        if isinstance(widget, (tk.Text, tk.Listbox, ttk.Treeview, ttk.Spinbox)):
+            return None
+        current: tk.Misc | None = widget
+        while current is not None:
+            scroll = getattr(current, "radar_scroll", None)
+            if callable(scroll):
+                scroll(event)
+                return "break"
+            current = getattr(current, "master", None)
+        return None
+
+    def _build_broker(self, parent: tk.Misc) -> ttk.LabelFrame:
+        outer = ttk.LabelFrame(parent, text="Brokers", padding=8)
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(0, weight=1)
+        shell, frame = self._scrollable(outer)
+        shell.grid(row=0, column=0, sticky="nsew")
         frame.columnconfigure(1, weight=1)
+        frame.rowconfigure(8, weight=1)
 
         ttk.Label(frame, text="Guardados").grid(row=0, column=0, sticky="w")
         self.broker_combo = ttk.Combobox(frame, state="readonly")
@@ -452,11 +576,12 @@ class RadarApp:
         )
         holder = tk.Frame(frame, bg=self.theme.field, highlightbackground=self.theme.line, highlightthickness=1)
         holder.radar_role = "field"
-        holder.grid(row=8, column=0, columnspan=3, sticky="ew")
+        holder.grid(row=8, column=0, columnspan=3, sticky="nsew")
         holder.columnconfigure(0, weight=1)
+        holder.rowconfigure(0, weight=1)
         self.topics_canvas = tk.Canvas(holder, height=88, bg=self.theme.field, highlightthickness=0)
         self.topics_canvas.radar_role = "field"
-        self.topics_canvas.grid(row=0, column=0, sticky="ew")
+        self.topics_canvas.grid(row=0, column=0, sticky="nsew")
         topics_scroll = ttk.Scrollbar(holder, orient="vertical", command=self.topics_canvas.yview)
         topics_scroll.grid(row=0, column=1, sticky="ns")
         self.topics_canvas.configure(yscrollcommand=topics_scroll.set)
@@ -465,8 +590,7 @@ class RadarApp:
         self._topics_window = self.topics_canvas.create_window((0, 0), window=self.topics_list, anchor="nw")
         self.topics_list.bind("<Configure>", self._fit_topics)
         self.topics_canvas.bind("<Configure>", self._fit_topics_width)
-        self.topics_canvas.bind("<Enter>", self._bind_topics_wheel)
-        self.topics_canvas.bind("<Leave>", self._unbind_topics_wheel)
+        self.topics_canvas.radar_scroll = self._scroll_topics
         self._topic_rows: list[tuple[tk.Frame, str, tk.BooleanVar, ttk.Checkbutton, tk.Button]] = []
 
         add = tk.Frame(frame, bg=self.theme.bg)
@@ -494,10 +618,14 @@ class RadarApp:
         files.grid(row=11, column=0, columnspan=3, sticky="w", pady=(8, 0))
         ttk.Button(files, text="Exportar", command=self.export_settings).pack(side="left")
         ttk.Button(files, text="Importar", command=self.import_settings).pack(side="left", padx=8)
+        return outer
 
-    def _build_publish(self, parent: tk.Frame) -> None:
-        frame = ttk.LabelFrame(parent, text="Publicar", padding=12)
-        frame.grid(row=0, column=1, sticky="nsew")
+    def _build_publish(self, parent: tk.Misc) -> ttk.LabelFrame:
+        outer = ttk.LabelFrame(parent, text="Publicar", padding=8)
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(0, weight=1)
+        shell, frame = self._scrollable(outer)
+        shell.grid(row=0, column=0, sticky="nsew")
         frame.columnconfigure(1, weight=1)
         frame.rowconfigure(4, weight=1)
 
@@ -522,8 +650,13 @@ class RadarApp:
         ttk.Checkbutton(qos_row, text="Retenido", variable=self.publish_retain_var).pack(side="left", padx=(16, 0))
 
         ttk.Label(frame, text="Payload").grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 2))
+        payload_box = tk.Frame(frame, bg=self.theme.bg)
+        payload_box.radar_role = "panel"
+        payload_box.grid(row=4, column=0, columnspan=2, sticky="nsew")
+        payload_box.rowconfigure(0, weight=1)
+        payload_box.columnconfigure(0, weight=1)
         self.publish_payload = tk.Text(
-            frame,
+            payload_box,
             height=8,
             wrap="word",
             font=("Consolas", 10),
@@ -535,7 +668,10 @@ class RadarApp:
             pady=6,
         )
         self.publish_payload.radar_role = "field"
-        self.publish_payload.grid(row=4, column=0, columnspan=2, sticky="nsew")
+        self.publish_payload.grid(row=0, column=0, sticky="nsew")
+        payload_scroll = ttk.Scrollbar(payload_box, orient="vertical", command=self.publish_payload.yview)
+        payload_scroll.grid(row=0, column=1, sticky="ns")
+        self.publish_payload.configure(yscrollcommand=payload_scroll.set)
 
         ttk.Label(frame, text="Favoritos").grid(row=5, column=0, sticky="w", pady=(8, 4))
         favorites = tk.Frame(frame, bg=self.theme.bg)
@@ -557,9 +693,12 @@ class RadarApp:
             text="Publicar",
             command=self.publish_message,
             bg=self.theme.button,
-            fg="white",
+            fg=self.theme.on_button,
             activebackground=self.theme.button_dark,
-            activeforeground="white",
+            activeforeground=self.theme.on_button,
+            highlightbackground=self.theme.line,
+            highlightcolor=self.theme.line,
+            highlightthickness=1,
             font=("Segoe UI", 11, "bold"),
             relief="flat",
             padx=12,
@@ -568,19 +707,23 @@ class RadarApp:
         )
         self.publish_button.radar_role = "primary"
         self.publish_button.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        return outer
 
-    def _build_listen_bar(self) -> None:
-        bar = tk.Frame(self.root, bg=self.theme.bg)
+    def _build_listen_bar(self, parent: tk.Misc) -> None:
+        bar = tk.Frame(parent, bg=self.theme.bg)
         bar.radar_role = "panel"
-        bar.pack(fill="x", padx=16, pady=(8, 4))
+        bar.pack(side="bottom", fill="x", pady=(8, 0))
         self.listen_button = tk.Button(
             bar,
             text="Comenzar a escuchar",
             command=self.toggle_listen,
             bg=self.theme.button,
-            fg="white",
+            fg=self.theme.on_button,
             activebackground=self.theme.button_dark,
-            activeforeground="white",
+            activeforeground=self.theme.on_button,
+            highlightbackground=self.theme.line,
+            highlightcolor=self.theme.line,
+            highlightthickness=1,
             font=("Segoe UI", 12, "bold"),
             relief="flat",
             padx=18,
@@ -590,9 +733,8 @@ class RadarApp:
         self.listen_button.radar_role = "primary"
         self.listen_button.pack(fill="x")
 
-    def _build_log(self) -> None:
-        frame = ttk.LabelFrame(self.root, text="Mensajes", padding=12)
-        frame.pack(fill="both", expand=True, padx=16, pady=(4, 14))
+    def _build_log(self, parent: tk.Misc) -> ttk.LabelFrame:
+        frame = ttk.LabelFrame(parent, text="Mensajes", padding=12)
         frame.rowconfigure(1, weight=1)
         frame.columnconfigure(0, weight=1)
 
@@ -632,6 +774,7 @@ class RadarApp:
         self._log_menu.add_command(label="Copiar", command=self._copy_log)
         self._log_menu.add_command(label="Seleccionar todo", command=self._select_all_log)
         self._paint_log_tags()
+        return frame
 
     def _load_initial(self) -> None:
         self._publish_broker_id = self.settings.selected_broker_id
@@ -833,12 +976,6 @@ class RadarApp:
 
     def _fit_topics_width(self, event: tk.Event) -> None:
         self.topics_canvas.itemconfigure(self._topics_window, width=event.width)
-
-    def _bind_topics_wheel(self, _event: object) -> None:
-        self.topics_canvas.bind_all("<MouseWheel>", self._scroll_topics)
-
-    def _unbind_topics_wheel(self, _event: object) -> None:
-        self.topics_canvas.unbind_all("<MouseWheel>")
 
     def _scroll_topics(self, event: tk.Event) -> None:
         self.topics_canvas.yview_scroll(int(-event.delta / 120), "units")
@@ -1316,9 +1453,25 @@ class RadarApp:
 
     def _set_listening_ui(self, listening: bool) -> None:
         if listening:
-            self.listen_button.configure(text="Detener", bg=self.theme.stop, activebackground=self.theme.stop_dark)
+            self.listen_button.configure(
+                text="Detener",
+                bg=self.theme.stop,
+                fg="white",
+                activebackground=self.theme.stop_dark,
+                activeforeground="white",
+                highlightbackground=self.theme.stop_dark,
+                highlightcolor=self.theme.stop_dark,
+            )
         else:
-            self.listen_button.configure(text="Comenzar a escuchar", bg=self.theme.button, activebackground=self.theme.button_dark)
+            self.listen_button.configure(
+                text="Comenzar a escuchar",
+                bg=self.theme.button,
+                fg=self.theme.on_button,
+                activebackground=self.theme.button_dark,
+                activeforeground=self.theme.on_button,
+                highlightbackground=self.theme.line,
+                highlightcolor=self.theme.line,
+            )
         state = "disabled" if listening else "normal"
         combo_state = "disabled" if listening else "readonly"
         self.broker_combo.configure(state=combo_state)
@@ -1478,22 +1631,29 @@ class RadarApp:
         window.geometry("980x720")
         window.minsize(720, 520)
         window.configure(bg=theme.bg)
-        window.columnconfigure(0, weight=1)
-        window.rowconfigure(1, weight=1)
-        window.rowconfigure(2, weight=1)
         self._inbox_window = window
 
         bar = tk.Frame(window, bg=theme.bg)
         bar.radar_role = "panel"
-        bar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=16, pady=(14, 8))
+        bar.pack(fill="x", padx=16, pady=(14, 8))
         count = tk.Label(bar, text="", bg=theme.bg, fg=theme.muted, font=("Segoe UI", 10))
         count.radar_role = "muted"
         count.pack(side="left")
         self._inbox_count = count
         ttk.Button(bar, text="Actualizar", command=self._reload_inbox).pack(side="right")
+        ttk.Button(bar, text="Limpiar todo", command=self._clear_inbox).pack(side="right", padx=(0, 8))
+        ttk.Button(bar, text="Borrar", command=self._delete_inbox_message).pack(side="right", padx=(0, 8))
+
+        split = self._paned(window, tk.VERTICAL)
+        split.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+        self._inbox_split = split
+        listing = tk.Frame(split, bg=theme.bg)
+        listing.radar_role = "panel"
+        listing.rowconfigure(0, weight=1)
+        listing.columnconfigure(0, weight=1)
 
         tree = ttk.Treeview(
-            window,
+            listing,
             columns=("fecha_recepcion", "topico", "payload", "qos"),
             show="headings",
             style="Inbox.Treeview",
@@ -1506,16 +1666,18 @@ class RadarApp:
         tree.column("topico", width=240, minwidth=120, stretch=False)
         tree.column("payload", width=460, minwidth=160, stretch=True)
         tree.column("qos", width=50, minwidth=40, stretch=False, anchor="center")
-        tree.grid(row=1, column=0, sticky="nsew", padx=(16, 0), pady=(0, 8))
+        tree.grid(row=0, column=0, sticky="nsew")
         tree.bind("<<TreeviewSelect>>", self._show_inbox_payload)
-        scroll_y = ttk.Scrollbar(window, orient="vertical", command=tree.yview)
-        scroll_y.grid(row=1, column=1, sticky="ns", padx=(0, 16), pady=(0, 8))
-        tree.configure(yscrollcommand=scroll_y.set)
+        tree.bind("<Delete>", lambda _event: self._delete_inbox_message())
+        scroll_y = ttk.Scrollbar(listing, orient="vertical", command=tree.yview)
+        scroll_y.grid(row=0, column=1, sticky="ns")
+        scroll_x = ttk.Scrollbar(listing, orient="horizontal", command=tree.xview)
+        scroll_x.grid(row=1, column=0, sticky="ew")
+        tree.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
         self._inbox_tree = tree
 
-        viewer = tk.Frame(window, bg=theme.field, highlightbackground=theme.line, highlightthickness=1)
+        viewer = tk.Frame(split, bg=theme.field, highlightbackground=theme.line, highlightthickness=1)
         viewer.radar_role = "field"
-        viewer.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=16, pady=(0, 16))
         viewer.rowconfigure(0, weight=1)
         viewer.columnconfigure(0, weight=1)
         detail = tk.Text(
@@ -1542,8 +1704,26 @@ class RadarApp:
         detail.bind("<Key>", self._guard_log)
         self._inbox_detail = detail
         self._paint_inbox_tags()
+        split.add(listing, stretch="always", minsize=140)
+        split.add(viewer, stretch="always", minsize=120)
+        self._inbox_sash_ready = False
+        self._inbox_sash_bind = window.bind("<Configure>", self._place_inbox_sash, add="+")
         window.protocol("WM_DELETE_WINDOW", self._close_inbox)
         self._reload_inbox()
+
+    def _place_inbox_sash(self, _event: object = None) -> None:
+        if self._inbox_sash_ready:
+            return
+        split = self._inbox_split
+        window = self._inbox_window
+        if split is None or window is None or not split.winfo_exists():
+            return
+        height = split.winfo_height()
+        if height < 80:
+            return
+        self._inbox_sash_ready = True
+        window.unbind("<Configure>", self._inbox_sash_bind)
+        split.sash_place(0, 1, int(height * 0.55))
 
     def _close_inbox(self) -> None:
         window = self._inbox_window
@@ -1552,6 +1732,7 @@ class RadarApp:
         self._inbox_detail = None
         self._inbox_count = None
         self._inbox_payloads = {}
+        self._inbox_split = None
         if window is not None and window.winfo_exists():
             window.destroy()
 
@@ -1575,6 +1756,7 @@ class RadarApp:
             item = tree.insert(
                 "",
                 "end",
+                iid=str(row.id),
                 values=(row.fecha_recepcion, row.topico, preview, row.qos),
             )
             self._inbox_payloads[item] = row.payload
@@ -1582,6 +1764,39 @@ class RadarApp:
             noun = "mensaje" if len(rows) == 1 else "mensajes"
             self._inbox_count.configure(text=f"{len(rows)} {noun} del último mes")
         self._set_inbox_detail("")
+
+    def _delete_inbox_message(self) -> None:
+        tree = self._inbox_tree
+        window = self._inbox_window
+        if tree is None or not tree.winfo_exists():
+            return
+        selected = tree.selection()
+        if not selected:
+            messagebox.showwarning("Radar MQTT", "Elegí un mensaje.", parent=window)
+            return
+        if not messagebox.askyesno("Radar MQTT", "¿Borrar este mensaje del archivo?", parent=window):
+            return
+        try:
+            self.inbox.delete(int(selected[0]))
+        except (sqlite3.Error, ValueError) as error:
+            self._log(f"No se pudo borrar el mensaje: {error}", "error")
+            messagebox.showerror("Radar MQTT", f"No se pudo borrar el mensaje.\n{error}", parent=window)
+            return
+        self._reload_inbox()
+
+    def _clear_inbox(self) -> None:
+        window = self._inbox_window
+        if window is None or not window.winfo_exists():
+            return
+        if not messagebox.askyesno("Radar MQTT", "¿Borrar todos los mensajes del archivo?", parent=window):
+            return
+        try:
+            self.inbox.clear()
+        except sqlite3.Error as error:
+            self._log(f"No se pudo limpiar el archivo: {error}", "error")
+            messagebox.showerror("Radar MQTT", f"No se pudo limpiar el archivo.\n{error}", parent=window)
+            return
+        self._reload_inbox()
 
     def _show_inbox_payload(self, _event: object = None) -> None:
         tree = self._inbox_tree
