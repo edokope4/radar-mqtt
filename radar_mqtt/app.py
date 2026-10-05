@@ -110,6 +110,17 @@ def pretty_json(text: str) -> str | None:
     return json.dumps(value, ensure_ascii=False, separators=(", ", ": "))
 
 
+def pretty_json_lines(text: str) -> str | None:
+    stripped = text.strip()
+    if not stripped or stripped[0] not in "{[":
+        return None
+    try:
+        value = json.loads(stripped)
+    except json.JSONDecodeError:
+        return None
+    return json.dumps(value, ensure_ascii=False, indent=2)
+
+
 def json_tokens(text: str) -> list[tuple[str, str]]:
     tokens: list[tuple[str, str]] = []
     index = 0
@@ -276,6 +287,7 @@ class RadarApp:
         self._paint(self.root)
         self._paint(self._log_menu)
         self._paint_log_tags()
+        self._paint_inbox_tags()
         self._set_listening_ui(self.listening)
         self._set_status(self.status_label.cget("text"), self._status_role)
 
@@ -343,6 +355,19 @@ class RadarApp:
         self.log.tag_configure("json_bool", foreground=theme.json_bool, font=("Consolas", 10, "bold"))
         self.log.tag_configure("json_null", foreground=theme.json_null, font=("Consolas", 10, "italic"))
         self.log.tag_configure("json_punct", foreground=theme.ink)
+
+    def _paint_inbox_tags(self) -> None:
+        detail = self._inbox_detail
+        if detail is None or not detail.winfo_exists():
+            return
+        theme = self.theme
+        detail.tag_configure("json_key", foreground=theme.json_key, font=("Consolas", 10, "bold"))
+        detail.tag_configure("json_str", foreground=theme.json_str)
+        detail.tag_configure("json_num", foreground=theme.json_num)
+        detail.tag_configure("json_bool", foreground=theme.json_bool, font=("Consolas", 10, "bold"))
+        detail.tag_configure("json_null", foreground=theme.json_null, font=("Consolas", 10, "italic"))
+        detail.tag_configure("json_punct", foreground=theme.ink)
+        detail.tag_configure("msg", foreground=theme.ink)
 
     def _build(self) -> None:
         header = tk.Frame(self.root, bg=self.theme.bg)
@@ -578,7 +603,7 @@ class RadarApp:
         self.count_label.radar_role = "muted"
         self.count_label.pack(side="left")
         ttk.Button(top, text="Limpiar", command=self.clear_log).pack(side="right")
-        ttk.Button(top, text="INBOX", command=self.open_inbox).pack(side="right", padx=(0, 8))
+        ttk.Button(top, text="Archivo", command=self.open_inbox).pack(side="right", padx=(0, 8))
 
         self.log = tk.Text(
             frame,
@@ -1449,12 +1474,13 @@ class RadarApp:
         theme = self.theme
         window = tk.Toplevel(self.root)
         window.radar_role = "panel"
-        window.title("INBOX")
-        window.geometry("980x560")
-        window.minsize(720, 420)
+        window.title("Archivo")
+        window.geometry("980x720")
+        window.minsize(720, 520)
         window.configure(bg=theme.bg)
         window.columnconfigure(0, weight=1)
         window.rowconfigure(1, weight=1)
+        window.rowconfigure(2, weight=1)
         self._inbox_window = window
 
         bar = tk.Frame(window, bg=theme.bg)
@@ -1487,10 +1513,15 @@ class RadarApp:
         tree.configure(yscrollcommand=scroll_y.set)
         self._inbox_tree = tree
 
+        viewer = tk.Frame(window, bg=theme.field, highlightbackground=theme.line, highlightthickness=1)
+        viewer.radar_role = "field"
+        viewer.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=16, pady=(0, 16))
+        viewer.rowconfigure(0, weight=1)
+        viewer.columnconfigure(0, weight=1)
         detail = tk.Text(
-            window,
-            height=6,
-            wrap="word",
+            viewer,
+            height=12,
+            wrap="none",
             font=("Consolas", 10),
             bg=theme.field,
             fg=theme.ink,
@@ -1501,10 +1532,16 @@ class RadarApp:
             cursor="xterm",
         )
         detail.radar_role = "field"
-        detail.grid(row=2, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 16))
+        detail.grid(row=0, column=0, sticky="nsew")
+        detail_scroll_y = ttk.Scrollbar(viewer, orient="vertical", command=detail.yview)
+        detail_scroll_y.grid(row=0, column=1, sticky="ns")
+        detail_scroll_x = ttk.Scrollbar(viewer, orient="horizontal", command=detail.xview)
+        detail_scroll_x.grid(row=1, column=0, sticky="ew")
+        detail.configure(yscrollcommand=detail_scroll_y.set, xscrollcommand=detail_scroll_x.set)
         detail.configure(state="disabled")
         detail.bind("<Key>", self._guard_log)
         self._inbox_detail = detail
+        self._paint_inbox_tags()
         window.protocol("WM_DELETE_WINDOW", self._close_inbox)
         self._reload_inbox()
 
@@ -1560,11 +1597,17 @@ class RadarApp:
         detail = self._inbox_detail
         if detail is None or not detail.winfo_exists():
             return
+        formatted = pretty_json_lines(text) if text else None
+        shown = formatted if formatted is not None else text
         detail.configure(state="normal")
         detail.delete("1.0", "end")
-        if text:
-            detail.insert("1.0", text)
+        if shown and formatted is not None:
+            for tag, chunk in json_tokens(shown):
+                detail.insert("end", chunk, tag) if tag else detail.insert("end", chunk)
+        elif shown:
+            detail.insert("1.0", shown, "msg")
         detail.configure(state="disabled")
+        detail.see("1.0")
 
     def _now(self) -> str:
         return datetime.now().strftime("%H:%M:%S")

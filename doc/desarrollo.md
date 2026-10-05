@@ -16,7 +16,7 @@ No se conecta al abrirse. Hay que pulsar **Comenzar a escuchar**.
 - Payloads guardados con nombre. Si el texto del mensaje coincide, el registro lo marca con ese nombre. **Mostrar solo estos payloads** oculta el resto.
 - Ventana de publicación: broker, tópico, QoS, retain y cuerpo del mensaje.
 - Favoritos de publicación. Guardan nombre, broker, tópico, cuerpo, QoS y retain. **Guardar en favoritos** pide el nombre y, si ya existe, pregunta si se reemplaza. **Cargar** rellena el formulario. **Quitar** borra el favorito elegido. Si el broker de ese favorito ya no existe, se carga el resto y se avisa.
-- Registro SQLite del último mes. Cada mensaje recibido guarda `fecha_recepcion`, `topico`, `payload` y `qos` en la tabla `INBOX`. Lo más viejo que un mes calendario se borra al guardar o al abrir la lista. El botón **INBOX** abre otra ventana con la tabla; al elegir una fila se ve el payload completo. La ventana principal sigue mostrando solo el registro en vivo.
+- Registro SQLite del último mes. Cada mensaje recibido guarda `fecha_recepcion`, `topico`, `payload` y `qos` en la tabla `INBOX`. Lo más viejo que un mes calendario se borra al guardar o al abrir la lista. El botón **Archivo** abre otra ventana con la tabla. La mitad inferior muestra el mensaje elegido: si es JSON, va indentado y con saltos de línea. La ventana principal sigue mostrando solo el registro en vivo.
 - Tema oscuro, guardado en la configuración. También se puede exportar e importar el JSON de ajustes.
 
 ## Dónde se guardan los datos
@@ -25,7 +25,7 @@ No se conecta al abrirse. Hay que pulsar **Comenzar a escuchar**.
 
 Una configuración vieja, sin la clave `favorites`, se abre con la lista de favoritos vacía.
 
-El primer inicio crea un broker de ejemplo (`test.mosquitto.org`, tópico `cafetera/hacer`, payload `hacer`, nombre «Hacer café»). Ese ejemplo no coincide con el contrato actual de la cafetera:
+El primer inicio crea un broker de ejemplo (`broker.hivemq.com`, tópico `cafetera/hacer`, payload `hacer`, nombre «Hacer café»). Ese ejemplo no coincide con el contrato actual de la cafetera:
 
 | Uso | Tópico | Cuerpo |
 | --- | --- | --- |

@@ -28,7 +28,7 @@ py -3 -m venv .venv
 
 La configuración se guarda en `%APPDATA%\RadarMqtt\config.json`.
 
-El último mes de mensajes recibidos queda en `%APPDATA%\RadarMqtt\inbox.db`, tabla `INBOX` (`fecha_recepcion`, `topico`, `payload`, `qos`). El botón **INBOX**, junto al registro en vivo, abre esos datos en otra ventana.
+El último mes de mensajes recibidos queda en `%APPDATA%\RadarMqtt\inbox.db`, tabla `INBOX` (`fecha_recepcion`, `topico`, `payload`, `qos`). El botón **Archivo**, junto al registro en vivo, abre esos datos en otra ventana.
 
 ## Ejecutable
 

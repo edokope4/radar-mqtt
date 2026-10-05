@@ -70,8 +70,8 @@ def default_settings() -> Settings:
         brokers=[
             Broker(
                 id=broker_id,
-                name="Mosquitto test",
-                host="test.mosquitto.org",
+                name="HiveMQ",
+                host="broker.hivemq.com",
                 port=1883,
                 topics=[Topic("cafetera/hacer")],
                 qos=0,
