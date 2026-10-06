@@ -5,6 +5,7 @@ import json
 import os
 import queue
 import sys
+import webbrowser
 import sqlite3
 import threading
 import uuid
@@ -15,6 +16,7 @@ import tkinter as tk
 
 import paho.mqtt.client as mqtt
 
+from radar_mqtt import __version__
 from radar_mqtt.inbox import InboxStore
 from radar_mqtt.storage import (
     Broker,
@@ -81,8 +83,8 @@ LIGHT = Theme(
 )
 
 DARK = Theme(
-    bg="#12141C",
-    field="#1C2030",
+    bg="#3E3E3E",
+    field="#4A4A4A",
     ink="#F6F3EA",
     muted="#A39EAE",
     accent="#E2CF65",
@@ -100,7 +102,7 @@ DARK = Theme(
     json_bool="#6577E2",
     json_null="#A39EAE",
     line="#6577E2",
-    copy_active="#2A3148",
+    copy_active="#5A5A5A",
     on_button="#1C1808",
     on_detail="#FFFFFF",
 )
@@ -251,7 +253,6 @@ class RadarApp:
         self.theme = DARK if settings.dark else LIGHT
         self._status_role = "muted"
         self.inbox = InboxStore()
-        self._inbox_window: tk.Toplevel | None = None
         self._inbox_tree: ttk.Treeview | None = None
         self._inbox_detail: tk.Text | None = None
         self._inbox_count: tk.Label | None = None
@@ -334,6 +335,13 @@ class RadarApp:
             background=[("selected", theme.button)],
             foreground=[("selected", theme.on_button)],
         )
+        style.configure("TNotebook", background=theme.bg, borderwidth=0)
+        style.configure("TNotebook.Tab", background=theme.field, foreground=theme.ink, padding=(16, 8))
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", theme.button)],
+            foreground=[("selected", theme.on_button)],
+        )
 
     def _toggle_theme(self) -> None:
         self.settings.dark = bool(self.dark_var.get())
@@ -399,6 +407,8 @@ class RadarApp:
                 highlightbackground=theme.line,
                 highlightcolor=theme.line,
             )
+        elif role == "link":
+            widget.configure(bg=theme.bg, fg=theme.accent, cursor="hand2")
         elif role == "menu":
             widget.configure(bg=theme.field, fg=theme.ink, activebackground=theme.button, activeforeground=theme.on_button)
         elif role == "sash":
@@ -433,6 +443,9 @@ class RadarApp:
         detail.tag_configure("msg", foreground=theme.ink)
 
     def _build(self) -> None:
+        self.dark_var = tk.BooleanVar(value=self.settings.dark)
+        self._build_menu()
+
         header = tk.Frame(self.root, bg=self.theme.bg)
         header.radar_role = "panel"
         header.pack(fill="x", padx=16, pady=(14, 6))
@@ -442,27 +455,159 @@ class RadarApp:
         self.status_label = tk.Label(header, text="Detenido", bg=self.theme.bg, fg=self.theme.muted, font=("Segoe UI", 11))
         self.status_label.radar_role = "status"
         self.status_label.pack(side="right", padx=(12, 0))
-        self.dark_var = tk.BooleanVar(value=self.settings.dark)
         ttk.Checkbutton(header, text="Oscuro", variable=self.dark_var, command=self._toggle_theme).pack(side="right")
         self.notice_label = tk.Label(header, text="", bg=self.theme.bg, fg=self.theme.ok, font=("Segoe UI", 10))
         self.notice_label.radar_role = "notice"
         self.notice_label.pack(side="right")
 
-        self._rows = self._paned(self.root, tk.VERTICAL)
-        self._rows.pack(fill="both", expand=True, padx=16, pady=(4, 14))
-        top = tk.Frame(self._rows, bg=self.theme.bg)
-        top.radar_role = "panel"
-        self._top_pane = top
-        self._columns = self._paned(top, tk.HORIZONTAL)
-        self._build_listen_bar(top)
-        self._columns.pack(fill="both", expand=True)
-        self._columns.add(self._build_broker(self._columns), stretch="always", minsize=340)
-        self._columns.add(self._build_publish(self._columns), stretch="always", minsize=280)
-        self._rows.add(top, stretch="never", minsize=280)
-        self._rows.add(self._build_log(self._rows), stretch="always", minsize=160)
-        self._sashes_ready = False
-        self._sash_bind = self.root.bind("<Configure>", self._place_sashes, add="+")
+        self._build_listen_bar(self.root)
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill="both", expand=True, padx=16, pady=(4, 8))
+        self._tabs = {}
+        brokers = self._build_broker(self.notebook)
+        publish = self._build_publish(self.notebook)
+        messages = self._build_log(self.notebook)
+        archivo = self._build_inbox(self.notebook)
+        self.notebook.add(brokers, text="Brokers")
+        self.notebook.add(publish, text="Publicar")
+        self.notebook.add(messages, text="Mensajes Recibidos")
+        self.notebook.add(archivo, text="Archivo")
+        self._tabs = {"brokers": brokers, "publish": publish, "messages": messages, "archivo": archivo}
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
         self.root.bind_all("<MouseWheel>", self._on_mouse_wheel)
+
+    def _menu(self, parent: tk.Misc) -> tk.Menu:
+        menu = tk.Menu(
+            parent,
+            tearoff=0,
+            bg=self.theme.field,
+            fg=self.theme.ink,
+            activebackground=self.theme.button,
+            activeforeground=self.theme.on_button,
+        )
+        menu.radar_role = "menu"
+        return menu
+
+    def _build_menu(self) -> None:
+        bar = self._menu(self.root)
+        broker = self._menu(bar)
+        broker.add_command(label="Nuevo broker", command=self._menu_new_broker)
+        broker.add_command(label="Editar brokers", command=self._menu_edit_brokers)
+        broker.add_separator()
+        broker.add_command(label="Exportar configuración", command=self.export_settings)
+        broker.add_command(label="Importar configuración", command=self.import_settings)
+        bar.add_cascade(label="Broker", menu=broker)
+        self._broker_menu = broker
+
+        publish = self._menu(bar)
+        publish.add_command(label="Publicar", command=self._menu_publish)
+        publish.add_command(label="Guardar en favoritos", command=self._menu_save_favorite)
+        bar.add_cascade(label="Publicar", menu=publish)
+
+        messages = self._menu(bar)
+        messages.add_command(label="Comenzar a escuchar", command=self._menu_listen)
+        self._listen_menu = messages
+        self._listen_menu_index = messages.index("end")
+        messages.add_command(label="Archivo", command=self._menu_open_inbox)
+        messages.add_command(label="Limpiar", command=self._menu_clear_log)
+        bar.add_cascade(label="Mensajes", menu=messages)
+
+        view = self._menu(bar)
+        view.add_command(label="Brokers", command=lambda: self._show_tab("brokers"))
+        view.add_command(label="Publicar", command=lambda: self._show_tab("publish"))
+        view.add_command(label="Mensajes Recibidos", command=lambda: self._show_tab("messages"))
+        view.add_command(label="Archivo", command=lambda: self._show_tab("archivo"))
+        view.add_separator()
+        view.add_checkbutton(label="Oscuro", variable=self.dark_var, command=self._toggle_theme)
+        view.add_separator()
+        view.add_command(label="Acerca de...", command=self._show_about)
+        bar.add_cascade(label="Ver", menu=view)
+        self.root.configure(menu=bar)
+
+    def _show_tab(self, name: str) -> None:
+        self.notebook.select(self._tabs[name])
+
+    def _on_tab_changed(self, _event: object = None) -> None:
+        if self.notebook.select() == str(self._tabs["archivo"]):
+            self._reload_inbox()
+            self.root.after_idle(self._place_inbox_sash)
+
+    def _menu_new_broker(self) -> None:
+        self._show_tab("brokers")
+        self.new_broker()
+
+    def _menu_edit_brokers(self) -> None:
+        self._show_tab("brokers")
+
+    def _menu_publish(self) -> None:
+        self._show_tab("publish")
+        self.publish_message()
+
+    def _menu_save_favorite(self) -> None:
+        self._show_tab("publish")
+        self.save_favorite()
+
+    def _menu_listen(self) -> None:
+        self.toggle_listen()
+        if self.listening:
+            self._show_tab("messages")
+
+    def _menu_open_inbox(self) -> None:
+        self.open_inbox()
+
+    def _menu_clear_log(self) -> None:
+        self._show_tab("messages")
+        self.clear_log()
+
+    def _show_about(self) -> None:
+        current = getattr(self, "_about_window", None)
+        if current is not None and current.winfo_exists():
+            current.lift()
+            return
+        theme = self.theme
+        window = tk.Toplevel(self.root)
+        window.title("Acerca de Radar MQTT")
+        window.resizable(False, False)
+        window.configure(bg=theme.bg)
+        window.radar_role = "panel"
+        window.transient(self.root)
+        apply_icon(window)
+        self._about_window = window
+
+        body = tk.Frame(window, bg=theme.bg)
+        body.radar_role = "panel"
+        body.pack(padx=28, pady=24)
+        name = tk.Label(body, text="Radar MQTT", bg=theme.bg, fg=theme.ink, font=("Segoe UI", 18, "bold"))
+        name.radar_role = "ink"
+        name.pack()
+        version = tk.Label(body, text=f"Versión {__version__}", bg=theme.bg, fg=theme.muted, font=("Segoe UI", 10))
+        version.radar_role = "muted"
+        version.pack(pady=(4, 14))
+        author_caption = tk.Label(body, text="Autor", bg=theme.bg, fg=theme.muted, font=("Segoe UI", 9))
+        author_caption.radar_role = "muted"
+        author_caption.pack()
+        author = tk.Label(body, text="DeContrabando.cl", bg=theme.bg, fg=theme.ink, font=("Segoe UI", 12))
+        author.radar_role = "ink"
+        author.pack(pady=(0, 14))
+        url = "https://github.com/edokope4/radar-mqtt"
+        link = tk.Label(
+            body,
+            text=url,
+            bg=theme.bg,
+            fg=theme.accent,
+            font=("Segoe UI", 10, "underline"),
+            cursor="hand2",
+        )
+        link.radar_role = "link"
+        link.pack()
+        link.bind("<Button-1>", lambda _event: webbrowser.open(url))
+        close = ttk.Button(body, text="Cerrar", command=window.destroy)
+        close.pack(pady=(18, 0))
+        window.protocol("WM_DELETE_WINDOW", window.destroy)
+        window.update_idletasks()
+        x = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - window.winfo_width()) // 2)
+        y = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - window.winfo_height()) // 2)
+        window.geometry(f"+{x}+{y}")
 
     def _paned(self, parent: tk.Misc, orient: str) -> tk.PanedWindow:
         pane = tk.PanedWindow(
@@ -478,19 +623,6 @@ class RadarApp:
         )
         pane.radar_role = "sash"
         return pane
-
-    def _place_sashes(self, _event: object = None) -> None:
-        if self._sashes_ready:
-            return
-        width = self._columns.winfo_width()
-        height = self._rows.winfo_height()
-        if self.root.winfo_width() < 800 or width < 40 or height < 40:
-            return
-        self._sashes_ready = True
-        self.root.unbind("<Configure>", self._sash_bind)
-        self._columns.sash_place(0, max(340, int(width * 0.58)), 1)
-        top = min(self._top_pane.winfo_reqheight(), height - 160)
-        self._rows.sash_place(0, 1, max(280, top))
 
     def _scrollable(self, parent: tk.Misc) -> tuple[tk.Frame, tk.Frame]:
         shell = tk.Frame(parent, bg=self.theme.bg)
@@ -549,8 +681,8 @@ class RadarApp:
             current = getattr(current, "master", None)
         return None
 
-    def _build_broker(self, parent: tk.Misc) -> ttk.LabelFrame:
-        outer = ttk.LabelFrame(parent, text="Brokers", padding=8)
+    def _build_broker(self, parent: tk.Misc) -> ttk.Frame:
+        outer = ttk.Frame(parent, padding=8)
         outer.columnconfigure(0, weight=1)
         outer.rowconfigure(0, weight=1)
         shell, frame = self._scrollable(outer)
@@ -651,8 +783,8 @@ class RadarApp:
         ttk.Button(files, text="Importar", command=self.import_settings).pack(side="left", padx=8)
         return outer
 
-    def _build_publish(self, parent: tk.Misc) -> ttk.LabelFrame:
-        outer = ttk.LabelFrame(parent, text="Publicar", padding=8)
+    def _build_publish(self, parent: tk.Misc) -> ttk.Frame:
+        outer = ttk.Frame(parent, padding=8)
         outer.columnconfigure(0, weight=1)
         outer.rowconfigure(0, weight=1)
         shell, frame = self._scrollable(outer)
@@ -743,7 +875,7 @@ class RadarApp:
     def _build_listen_bar(self, parent: tk.Misc) -> None:
         bar = tk.Frame(parent, bg=self.theme.bg)
         bar.radar_role = "panel"
-        bar.pack(side="bottom", fill="x", pady=(8, 0))
+        bar.pack(side="bottom", fill="x", padx=16, pady=(0, 14))
         self.listen_button = tk.Button(
             bar,
             text="Comenzar a escuchar",
@@ -764,8 +896,8 @@ class RadarApp:
         self.listen_button.radar_role = "primary"
         self.listen_button.pack(fill="x")
 
-    def _build_log(self, parent: tk.Misc) -> ttk.LabelFrame:
-        frame = ttk.LabelFrame(parent, text="Mensajes", padding=12)
+    def _build_log(self, parent: tk.Misc) -> ttk.Frame:
+        frame = ttk.Frame(parent, padding=12)
         frame.rowconfigure(1, weight=1)
         frame.columnconfigure(0, weight=1)
 
@@ -1281,6 +1413,7 @@ class RadarApp:
         self._message_count = 0
         self.count_label.configure(text="0 mensajes")
         self._set_listening_ui(True)
+        self._show_tab("messages")
         self._set_status("Conectando…", "warn")
         self._log(f"Conectando a {broker.host}:{broker.port}", "info")
         threading.Thread(target=self._connect, args=(broker,), daemon=True).start()
@@ -1518,6 +1651,9 @@ class RadarApp:
             remove.configure(state=state)
         self.save_broker_button.configure(state=state)
         self.delete_broker_button.configure(state=state)
+        listen_label = "Detener" if listening else "Comenzar a escuchar"
+        self._listen_menu.entryconfigure(self._listen_menu_index, label=listen_label)
+        self._broker_menu.entryconfigure("Nuevo broker", state=state)
 
     def _set_status(self, text: str, role: str) -> None:
         self._status_role = role
@@ -1651,23 +1787,18 @@ class RadarApp:
         self.count_label.configure(text="0 mensajes")
 
     def open_inbox(self) -> None:
-        if self._inbox_window is not None and self._inbox_window.winfo_exists():
-            self._inbox_window.lift()
-            self._reload_inbox()
-            return
-        theme = self.theme
-        window = tk.Toplevel(self.root)
-        window.radar_role = "panel"
-        window.title("Archivo")
-        apply_icon(window)
-        window.geometry("980x720")
-        window.minsize(720, 520)
-        window.configure(bg=theme.bg)
-        self._inbox_window = window
+        self._show_tab("archivo")
+        self._reload_inbox()
 
-        bar = tk.Frame(window, bg=theme.bg)
+    def _build_inbox(self, parent: tk.Misc) -> ttk.Frame:
+        theme = self.theme
+        frame = ttk.Frame(parent, padding=12)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(1, weight=1)
+
+        bar = tk.Frame(frame, bg=theme.bg)
         bar.radar_role = "panel"
-        bar.pack(fill="x", padx=16, pady=(14, 8))
+        bar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         count = tk.Label(bar, text="", bg=theme.bg, fg=theme.muted, font=("Segoe UI", 10))
         count.radar_role = "muted"
         count.pack(side="left")
@@ -1676,8 +1807,8 @@ class RadarApp:
         ttk.Button(bar, text="Limpiar todo", command=self._clear_inbox).pack(side="right", padx=(0, 8))
         ttk.Button(bar, text="Borrar", command=self._delete_inbox_message).pack(side="right", padx=(0, 8))
 
-        split = self._paned(window, tk.VERTICAL)
-        split.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+        split = self._paned(frame, tk.VERTICAL)
+        split.grid(row=1, column=0, sticky="nsew")
         self._inbox_split = split
         listing = tk.Frame(split, bg=theme.bg)
         listing.radar_role = "panel"
@@ -1739,34 +1870,23 @@ class RadarApp:
         split.add(listing, stretch="always", minsize=140)
         split.add(viewer, stretch="always", minsize=120)
         self._inbox_sash_ready = False
-        self._inbox_sash_bind = window.bind("<Configure>", self._place_inbox_sash, add="+")
-        window.protocol("WM_DELETE_WINDOW", self._close_inbox)
+        self._inbox_sash_bind = frame.bind("<Configure>", self._place_inbox_sash, add="+")
         self._reload_inbox()
+        return frame
 
     def _place_inbox_sash(self, _event: object = None) -> None:
         if self._inbox_sash_ready:
             return
         split = self._inbox_split
-        window = self._inbox_window
-        if split is None or window is None or not split.winfo_exists():
+        frame = self._tabs.get("archivo")
+        if split is None or frame is None or not split.winfo_exists():
             return
         height = split.winfo_height()
         if height < 80:
             return
         self._inbox_sash_ready = True
-        window.unbind("<Configure>", self._inbox_sash_bind)
+        frame.unbind("<Configure>", self._inbox_sash_bind)
         split.sash_place(0, 1, int(height * 0.55))
-
-    def _close_inbox(self) -> None:
-        window = self._inbox_window
-        self._inbox_window = None
-        self._inbox_tree = None
-        self._inbox_detail = None
-        self._inbox_count = None
-        self._inbox_payloads = {}
-        self._inbox_split = None
-        if window is not None and window.winfo_exists():
-            window.destroy()
 
     def _reload_inbox(self) -> None:
         tree = self._inbox_tree
@@ -1799,34 +1919,30 @@ class RadarApp:
 
     def _delete_inbox_message(self) -> None:
         tree = self._inbox_tree
-        window = self._inbox_window
         if tree is None or not tree.winfo_exists():
             return
         selected = tree.selection()
         if not selected:
-            messagebox.showwarning("Radar MQTT", "Elegí un mensaje.", parent=window)
+            messagebox.showwarning("Radar MQTT", "Elegí un mensaje.", parent=self.root)
             return
-        if not messagebox.askyesno("Radar MQTT", "¿Borrar este mensaje del archivo?", parent=window):
+        if not messagebox.askyesno("Radar MQTT", "¿Borrar este mensaje del archivo?", parent=self.root):
             return
         try:
             self.inbox.delete(int(selected[0]))
         except (sqlite3.Error, ValueError) as error:
             self._log(f"No se pudo borrar el mensaje: {error}", "error")
-            messagebox.showerror("Radar MQTT", f"No se pudo borrar el mensaje.\n{error}", parent=window)
+            messagebox.showerror("Radar MQTT", f"No se pudo borrar el mensaje.\n{error}", parent=self.root)
             return
         self._reload_inbox()
 
     def _clear_inbox(self) -> None:
-        window = self._inbox_window
-        if window is None or not window.winfo_exists():
-            return
-        if not messagebox.askyesno("Radar MQTT", "¿Borrar todos los mensajes del archivo?", parent=window):
+        if not messagebox.askyesno("Radar MQTT", "¿Borrar todos los mensajes del archivo?", parent=self.root):
             return
         try:
             self.inbox.clear()
         except sqlite3.Error as error:
             self._log(f"No se pudo limpiar el archivo: {error}", "error")
-            messagebox.showerror("Radar MQTT", f"No se pudo limpiar el archivo.\n{error}", parent=window)
+            messagebox.showerror("Radar MQTT", f"No se pudo limpiar el archivo.\n{error}", parent=self.root)
             return
         self._reload_inbox()
 
