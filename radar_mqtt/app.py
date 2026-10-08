@@ -231,20 +231,28 @@ def _subscription_rejected(reason_code_list: object) -> bool:
     return False
 
 
+class _ListenSession:
+    def __init__(self, broker_id: str, broker_name: str, topics: list[str], qos: int) -> None:
+        self.broker_id = broker_id
+        self.broker_name = broker_name
+        self.topics = list(topics)
+        self.qos = qos
+        self.queue: list[str] = []
+        self.inflight: str | None = None
+        self.subscribed: list[str] = []
+        self.failures: dict[str, int] = {}
+
+
 class RadarApp:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.events: queue.Queue[tuple] = queue.Queue()
-        self.client: mqtt.Client | None = None
+        self.clients: dict[str, mqtt.Client] = {}
+        self._sessions: dict[str, _ListenSession] = {}
+        self._listen_ids: set[str] = set()
         self._client_lock = threading.Lock()
         self.listening = False
         self._user_stop = False
-        self._active_topics: list[str] = []
-        self._active_qos = 0
-        self._subscribe_queue: list[str] = []
-        self._inflight_topic: str | None = None
-        self._subscribed: list[str] = []
-        self._topic_failures: dict[str, int] = {}
         self._message_count = 0
         self._draft_id = ""
         self._copy_buttons: list[tk.Button] = []
@@ -253,6 +261,7 @@ class RadarApp:
         self.theme = DARK if settings.dark else LIGHT
         self._status_role = "muted"
         self.inbox = InboxStore()
+        self._inbox_reloading = False
         self._inbox_tree: ttk.Treeview | None = None
         self._inbox_detail: tk.Text | None = None
         self._inbox_count: tk.Label | None = None
@@ -465,14 +474,22 @@ class RadarApp:
         self.notebook.pack(fill="both", expand=True, padx=16, pady=(4, 8))
         self._tabs = {}
         brokers = self._build_broker(self.notebook)
+        escuchar = self._build_listen_choices(self.notebook)
         publish = self._build_publish(self.notebook)
         messages = self._build_log(self.notebook)
         archivo = self._build_inbox(self.notebook)
         self.notebook.add(brokers, text="Brokers")
+        self.notebook.add(escuchar, text="Escuchar")
         self.notebook.add(publish, text="Publicar")
         self.notebook.add(messages, text="Mensajes Recibidos")
         self.notebook.add(archivo, text="Archivo")
-        self._tabs = {"brokers": brokers, "publish": publish, "messages": messages, "archivo": archivo}
+        self._tabs = {
+            "brokers": brokers,
+            "escuchar": escuchar,
+            "publish": publish,
+            "messages": messages,
+            "archivo": archivo,
+        }
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
         self.root.bind_all("<MouseWheel>", self._on_mouse_wheel)
 
@@ -514,6 +531,7 @@ class RadarApp:
 
         view = self._menu(bar)
         view.add_command(label="Brokers", command=lambda: self._show_tab("brokers"))
+        view.add_command(label="Escuchar", command=lambda: self._show_tab("escuchar"))
         view.add_command(label="Publicar", command=lambda: self._show_tab("publish"))
         view.add_command(label="Mensajes Recibidos", command=lambda: self._show_tab("messages"))
         view.add_command(label="Archivo", command=lambda: self._show_tab("archivo"))
@@ -969,6 +987,7 @@ class RadarApp:
         elif labels:
             self.broker_combo.current(0)
         self._refresh_publish_brokers()
+        self._refresh_listen_choices()
 
     def _refresh_publish_brokers(self) -> None:
         labels = [self._broker_label(broker) for broker in self.settings.brokers]
@@ -1196,6 +1215,66 @@ class RadarApp:
     def _toggle_topic(self, _name: str) -> None:
         self._persist_topics()
 
+    def _build_listen_choices(self, parent: tk.Misc) -> ttk.Frame:
+        outer = ttk.Frame(parent, padding=12)
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(1, weight=1)
+        hint = tk.Label(
+            outer,
+            text="Marcá los brokers que se conectarán al escuchar.",
+            bg=self.theme.bg,
+            fg=self.theme.muted,
+            font=("Segoe UI", 10),
+        )
+        hint.radar_role = "muted"
+        hint.grid(row=0, column=0, sticky="w", pady=(0, 8))
+        shell, listing = self._scrollable(outer)
+        shell.grid(row=1, column=0, sticky="nsew")
+        self._listen_list = listing
+        self._listen_rows: list[tuple[tk.Frame, str, tk.BooleanVar, ttk.Checkbutton]] = []
+        return outer
+
+    def _refresh_listen_choices(self) -> None:
+        listing = getattr(self, "_listen_list", None)
+        if listing is None or not listing.winfo_exists():
+            return
+        for row, _broker_id, _variable, _check in self._listen_rows:
+            row.destroy()
+        self._listen_rows = []
+        for broker in self.settings.brokers:
+            self._add_listen_row(broker)
+
+    def _add_listen_row(self, broker: Broker) -> None:
+        row = tk.Frame(self._listen_list, bg=self.theme.bg)
+        row.radar_role = "panel"
+        row.pack(fill="x", pady=2)
+        variable = tk.BooleanVar(value=broker.listen)
+        check = ttk.Checkbutton(row, variable=variable, command=lambda broker_id=broker.id, flag=variable: self._toggle_listen_choice(broker_id, flag))
+        check.pack(side="left")
+        if self.listening:
+            check.configure(state="disabled")
+        detail = self._broker_label(broker)
+        if not enabled_topic_names(broker.topics):
+            detail += "    ·    sin tópicos activos"
+        label = tk.Label(
+            row,
+            text=detail,
+            bg=self.theme.bg,
+            fg=self.theme.ink,
+            anchor="w",
+            font=("Segoe UI", 10),
+        )
+        label.radar_role = "ink"
+        label.pack(side="left", fill="x", expand=True, padx=(4, 0))
+        self._listen_rows.append((row, broker.id, variable, check))
+
+    def _toggle_listen_choice(self, broker_id: str, variable: tk.BooleanVar) -> None:
+        broker = self._broker_by_id(broker_id)
+        if broker is None:
+            return
+        broker.listen = bool(variable.get())
+        save_settings(self.settings)
+
     def _persist_topics(self) -> None:
         broker = self._broker_by_id(self._draft_id)
         if broker is None:
@@ -1281,6 +1360,7 @@ class RadarApp:
             raise ValueError("Agregá al menos un tópico.")
         broker_id = self._draft_id or self.settings.selected_broker_id or str(uuid.uuid4())
         self._draft_id = broker_id
+        saved = self._broker_by_id(broker_id)
         return Broker(
             id=broker_id,
             name=name or host,
@@ -1292,6 +1372,7 @@ class RadarApp:
             client_id=self.client_var.get().strip() or "radar-mqtt",
             topics=topics,
             qos=qos,
+            listen=bool(saved.listen) if saved is not None else False,
         )
 
     def _store_broker(self, broker: Broker) -> None:
@@ -1391,23 +1472,36 @@ class RadarApp:
             self.start_listen()
 
     def start_listen(self) -> None:
+        broker: Broker | None
         try:
             broker = self.read_form()
         except ValueError as error:
-            messagebox.showwarning("Radar MQTT", str(error))
-            return
-        enabled = enabled_topic_names(broker.topics)
-        if not enabled:
+            if self.settings.brokers and not self.host_var.get().strip():
+                broker = None
+            else:
+                messagebox.showwarning("Radar MQTT", str(error))
+                return
+        if broker is not None:
             self._store_broker(broker)
-            messagebox.showwarning("Radar MQTT", "Activá al menos un tópico para escuchar.")
+        chosen: list[tuple[Broker, list[str]]] = []
+        for item in self.settings.brokers:
+            if not item.listen:
+                continue
+            topics = enabled_topic_names(item.topics)
+            if not topics:
+                self._log(f"Se omite {item.name or item.host}: no tiene tópicos activos.", "info")
+                continue
+            chosen.append((item, topics))
+        if not chosen:
+            self._show_tab("escuchar")
+            messagebox.showwarning("Radar MQTT", "Marcá al menos un broker en Escuchar, con un tópico activo.")
             return
-        self._store_broker(broker)
-        self._active_topics = enabled
-        self._active_qos = broker.qos
-        self._subscribe_queue = []
-        self._inflight_topic = None
-        self._subscribed = []
-        self._topic_failures = {}
+        self._sessions = {
+            item.id: _ListenSession(item.id, item.name or item.host, topics, item.qos)
+            for item, topics in chosen
+        }
+        self._listen_ids = set(self._sessions)
+        self.clients = {}
         self._user_stop = False
         self.listening = True
         self._message_count = 0
@@ -1415,31 +1509,33 @@ class RadarApp:
         self._set_listening_ui(True)
         self._show_tab("messages")
         self._set_status("Conectando…", "warn")
-        self._log(f"Conectando a {broker.host}:{broker.port}", "info")
-        threading.Thread(target=self._connect, args=(broker,), daemon=True).start()
+        names = ", ".join(item.name or item.host for item, _topics in chosen)
+        self._log(f"Conectando a {names}", "info")
+        for item, _topics in chosen:
+            threading.Thread(target=self._connect, args=(item,), daemon=True).start()
 
     def _connect(self, broker: Broker) -> None:
         try:
             client = self._build_client(broker)
             with self._client_lock:
-                if self._user_stop:
+                if self._user_stop or broker.id not in self._listen_ids:
                     return
-                self.client = client
+                self.clients[broker.id] = client
             client.connect_async(broker.host, broker.port, keepalive=30)
             client.loop_start()
-            if self._user_stop:
-                self._shutdown_client()
+            if self._user_stop or broker.id not in self._listen_ids:
+                self._shutdown_one(broker.id)
         except Exception as error:
-            with self._client_lock:
-                self.client = None
+            self._shutdown_one(broker.id)
             detail = str(error).strip() or error.__class__.__name__
-            self.events.put(("failed", detail))
+            self.events.put(("failed", broker.id, broker.name or broker.host, detail))
 
     def _build_client(self, broker: Broker, *, client_id: str | None = None, listen: bool = True) -> mqtt.Client:
         chosen = client_id or broker.client_id.strip() or f"radar-{uuid.uuid4().hex[:8]}"
         client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
             client_id=chosen,
+            userdata=broker.id if listen else None,
             protocol=mqtt.MQTTv311,
             reconnect_on_failure=listen,
         )
@@ -1455,89 +1551,106 @@ class RadarApp:
             client.on_disconnect = self._on_disconnect
         return client
 
-    def _on_connect(self, client: mqtt.Client, _userdata: object, _flags: object, reason_code: object, _properties: object) -> None:
+    def _session(self, userdata: object) -> _ListenSession | None:
+        if userdata is None:
+            return None
+        return self._sessions.get(str(userdata))
+
+    def _on_connect(self, client: mqtt.Client, userdata: object, _flags: object, reason_code: object, _properties: object) -> None:
+        session = self._session(userdata)
+        if session is None:
+            return
         try:
             if getattr(reason_code, "is_failure", reason_code not in (0, "Success")):
-                self.events.put(("broker_error", f"El broker rechazó la conexión ({reason_code})"))
+                self.events.put(("broker_error", session.broker_name, f"El broker rechazó la conexión ({reason_code})"))
                 return
-            self._subscribed = []
-            self._inflight_topic = None
-            self._subscribe_queue = list(self._active_topics)
-            self._subscribe_next(client)
+            session.subscribed = []
+            session.inflight = None
+            session.queue = list(session.topics)
+            self._subscribe_next(client, session)
         except Exception as error:
-            self.events.put(("broker_error", str(error)))
+            self.events.put(("broker_error", session.broker_name, str(error)))
 
-    def _subscribe_next(self, client: mqtt.Client) -> None:
-        if self._user_stop:
+    def _subscribe_next(self, client: mqtt.Client, session: _ListenSession) -> None:
+        if self._user_stop or session.broker_id not in self._sessions:
             return
-        if not self._subscribe_queue:
-            self._inflight_topic = None
-            self.events.put(("listening", list(self._subscribed)))
+        if not session.queue:
+            session.inflight = None
+            self.events.put(("listening", session.broker_name, list(session.subscribed)))
             return
-        topic = self._subscribe_queue.pop(0)
-        self._inflight_topic = topic
-        client.subscribe(topic, qos=self._active_qos)
+        topic = session.queue.pop(0)
+        session.inflight = topic
+        client.subscribe(topic, qos=session.qos)
 
     def _on_subscribe(
         self,
         client: mqtt.Client,
-        _userdata: object,
+        userdata: object,
         _mid: int,
         reason_code_list: object,
         _properties: object,
     ) -> None:
-        topic = self._inflight_topic
-        self._inflight_topic = None
+        session = self._session(userdata)
+        if session is None:
+            return
+        topic = session.inflight
+        session.inflight = None
         if topic and _subscription_rejected(reason_code_list):
-            self._reject_topic(topic)
+            self._reject_topic(session, topic)
         elif topic:
-            self._topic_failures.pop(topic, None)
-            self._subscribed.append(topic)
-        self._subscribe_next(client)
+            session.failures.pop(topic, None)
+            session.subscribed.append(topic)
+        self._subscribe_next(client, session)
 
-    def _reject_topic(self, topic: str) -> None:
-        self._active_topics = [item for item in self._active_topics if item != topic]
-        self._subscribe_queue = [item for item in self._subscribe_queue if item != topic]
-        self._topic_failures.pop(topic, None)
-        self.events.put(("topic_rejected", topic))
-        if not self._active_topics:
-            self.events.put(("no_topics",))
+    def _reject_topic(self, session: _ListenSession, topic: str) -> None:
+        session.topics = [item for item in session.topics if item != topic]
+        session.queue = [item for item in session.queue if item != topic]
+        session.failures.pop(topic, None)
+        self.events.put(("topic_rejected", session.broker_name, topic))
+        if not session.topics:
+            self.events.put(("no_topics", session.broker_id, session.broker_name))
 
-    def _on_message(self, _client: mqtt.Client, _userdata: object, message: mqtt.MQTTMessage) -> None:
+    def _on_message(self, _client: mqtt.Client, userdata: object, message: mqtt.MQTTMessage) -> None:
+        session = self._session(userdata)
+        broker_name = session.broker_name if session is not None else ""
         try:
             text = message.payload.decode("utf-8")
         except UnicodeDecodeError:
             text = message.payload.hex()
-        self.events.put(("message", message.topic, text, int(getattr(message, "qos", 0))))
+        self.events.put(("message", broker_name, message.topic, text, int(getattr(message, "qos", 0))))
 
-    def _on_disconnect(self, _client: mqtt.Client, _userdata: object, _flags: object, reason_code: object, _properties: object) -> None:
+    def _on_disconnect(self, _client: mqtt.Client, userdata: object, _flags: object, reason_code: object, _properties: object) -> None:
         if self._user_stop:
             return
-        topic = self._inflight_topic
-        self._inflight_topic = None
+        session = self._session(userdata)
+        if session is None:
+            return
+        topic = session.inflight
+        session.inflight = None
         reason = str(reason_code)
         if reason in {"0", "Normal disconnection", "Success"}:
             return
         if topic:
-            failures = self._topic_failures.get(topic, 0) + 1
-            self._topic_failures[topic] = failures
+            failures = session.failures.get(topic, 0) + 1
+            session.failures[topic] = failures
             if failures >= 2:
-                self._reject_topic(topic)
+                self._reject_topic(session, topic)
                 return
-        self.events.put(("reconnecting", reason))
+        self.events.put(("reconnecting", session.broker_name, reason))
 
     def stop_listen(self) -> None:
         self._user_stop = True
         self.listening = False
-        self._shutdown_client()
+        self._listen_ids.clear()
+        self._shutdown_all()
         self._set_listening_ui(False)
         self._set_status("Detenido", "muted")
         self._log("Escucha detenida", "info")
 
-    def _shutdown_client(self) -> None:
+    def _shutdown_one(self, broker_id: str) -> None:
+        self._sessions.pop(broker_id, None)
         with self._client_lock:
-            client = self.client
-            self.client = None
+            client = self.clients.pop(broker_id, None)
         if client is None:
             return
         try:
@@ -1545,6 +1658,16 @@ class RadarApp:
             client.disconnect()
         except Exception:
             return
+
+    def _shutdown_all(self) -> None:
+        broker_ids = set(self.clients) | set(self._sessions)
+        for broker_id in broker_ids:
+            self._shutdown_one(broker_id)
+
+    def _release_broker(self, broker_id: str) -> bool:
+        self._listen_ids.discard(broker_id)
+        self._shutdown_one(broker_id)
+        return not self._listen_ids
 
     def _poll(self) -> None:
         while True:
@@ -1559,33 +1682,25 @@ class RadarApp:
     def _handle_event(self, event: tuple) -> None:
         kind = event[0]
         if kind == "listening":
-            topics = ", ".join(event[1])
+            topics = ", ".join(event[2])
             self._set_status("Escuchando", "ok")
-            self._log(f"Conectado. Escuchando: {topics}", "info")
+            self._log(f"Conectado a {event[1]}. Escuchando: {topics}", "info")
         elif kind == "message":
-            self._show_message(event[1], event[2], event[3])
+            self._show_message(event[1], event[2], event[3], event[4])
         elif kind == "reconnecting":
-            self._set_status("Reconectando…", "warn")
-            self._log(f"Se cortó la conexión ({event[1]}). Reintentando…", "error")
+            self._log(f"Se cortó la conexión con {event[1]} ({event[2]}). Reintentando…", "error")
         elif kind == "topic_rejected":
-            self._log(f"El broker rechazó «{event[1]}». Se deja de escuchar ese tópico.", "error")
+            self._log(f"{event[1]} rechazó «{event[2]}». Se deja de escuchar ese tópico.", "error")
         elif kind == "no_topics":
-            self._user_stop = True
-            self.listening = False
-            self._shutdown_client()
-            self._set_listening_ui(False)
-            self._set_status("Detenido", "error")
-            self._log("El broker rechazó todos los tópicos.", "error")
+            self._log(f"{event[2]} rechazó todos los tópicos.", "error")
+            if self._release_broker(event[1]):
+                self._stop_after_listeners_ended()
         elif kind == "broker_error":
-            self._set_status("Reconectando…", "warn")
-            self._log(event[1], "error")
+            self._log(f"{event[1]}: {event[2]}", "error")
         elif kind == "failed":
-            self._user_stop = True
-            self.listening = False
-            self._shutdown_client()
-            self._set_listening_ui(False)
-            self._set_status("Detenido", "error")
-            self._log(f"No se pudo conectar: {event[1]}", "error")
+            self._log(f"No se pudo conectar a {event[2]}: {event[3]}", "error")
+            if self._release_broker(event[1]):
+                self._stop_after_listeners_ended()
         elif kind == "published":
             retained = " retenido" if event[3] else ""
             self._log(f"Publicado{retained} en {event[2]}   ·   {event[1]}", "info")
@@ -1595,9 +1710,16 @@ class RadarApp:
             self._publishing = False
             self.publish_button.configure(state="normal", text="Publicar")
 
-    def _show_message(self, topic: str, payload: str, qos: int) -> None:
+    def _stop_after_listeners_ended(self) -> None:
+        self._user_stop = True
+        self.listening = False
+        self._shutdown_all()
+        self._set_listening_ui(False)
+        self._set_status("Detenido", "error")
+
+    def _show_message(self, broker_name: str, topic: str, payload: str, qos: int) -> None:
         try:
-            self.inbox.record(topic, payload, qos)
+            self.inbox.record(topic, payload, qos, broker=broker_name)
         except sqlite3.Error as error:
             self._log(f"No se pudo guardar en INBOX: {error}", "error")
         else:
@@ -1608,7 +1730,7 @@ class RadarApp:
         self.count_label.configure(text=f"{self._message_count} {noun}")
         visible = payload.replace("\r\n", "\n").replace("\r", "\n")
         stamp = self._now()
-        header = f"{stamp}   {topic}"
+        header = f"{stamp}   {broker_name}   {topic}"
         if matched:
             header += f"   → {matched.name}"
         formatted = pretty_json(visible)
@@ -1644,6 +1766,8 @@ class RadarApp:
         self.port_entry.configure(state=state)
         self.qos_entry.configure(state=state)
         self.tls_check.configure(state=state)
+        for _row, _broker_id, _variable, check in self._listen_rows:
+            check.configure(state=state)
         self.topic_entry.configure(state=state)
         self.add_topic_button.configure(state=state)
         for _frame, _name, _var, check, remove in self._topic_rows:
@@ -1817,16 +1941,18 @@ class RadarApp:
 
         tree = ttk.Treeview(
             listing,
-            columns=("fecha_recepcion", "topico", "payload", "qos"),
+            columns=("fecha_recepcion", "broker", "topico", "payload", "qos"),
             show="headings",
             style="Inbox.Treeview",
         )
         tree.heading("fecha_recepcion", text="fecha_recepcion")
+        tree.heading("broker", text="broker")
         tree.heading("topico", text="topico")
         tree.heading("payload", text="payload")
         tree.heading("qos", text="qos")
         tree.column("fecha_recepcion", width=200, minwidth=180, stretch=False)
-        tree.column("topico", width=240, minwidth=120, stretch=False)
+        tree.column("broker", width=160, minwidth=100, stretch=False)
+        tree.column("topico", width=220, minwidth=120, stretch=False)
         tree.column("payload", width=460, minwidth=160, stretch=True)
         tree.column("qos", width=50, minwidth=40, stretch=False, anchor="center")
         tree.grid(row=0, column=0, sticky="nsew")
@@ -1897,25 +2023,37 @@ class RadarApp:
         except sqlite3.Error as error:
             self._log(f"No se pudo leer INBOX: {error}", "error")
             return
-        children = tree.get_children()
-        if children:
-            tree.delete(*children)
-        self._inbox_payloads = {}
-        for row in rows:
-            preview = " ".join(row.payload.split())
-            if len(preview) > 120:
-                preview = preview[:117] + "..."
-            item = tree.insert(
-                "",
-                "end",
-                iid=str(row.id),
-                values=(row.fecha_recepcion, row.topico, preview, row.qos),
-            )
-            self._inbox_payloads[item] = row.payload
+        selected = tree.selection()
+        keep = selected[0] if selected else ""
+        self._inbox_reloading = True
+        try:
+            children = tree.get_children()
+            if children:
+                tree.delete(*children)
+            self._inbox_payloads = {}
+            for row in rows:
+                preview = " ".join(row.payload.split())
+                if len(preview) > 120:
+                    preview = preview[:117] + "..."
+                item = tree.insert(
+                    "",
+                    "end",
+                    iid=str(row.id),
+                    values=(row.fecha_recepcion, row.broker, row.topico, preview, row.qos),
+                )
+                self._inbox_payloads[item] = row.payload
+        finally:
+            self._inbox_reloading = False
         if self._inbox_count is not None and self._inbox_count.winfo_exists():
             noun = "mensaje" if len(rows) == 1 else "mensajes"
             self._inbox_count.configure(text=f"{len(rows)} {noun} del último mes")
-        self._set_inbox_detail("")
+        if keep and tree.exists(keep):
+            tree.selection_set(keep)
+            tree.focus(keep)
+            tree.see(keep)
+            self._set_inbox_detail(self._inbox_payloads.get(keep, ""))
+        else:
+            self._set_inbox_detail("")
 
     def _delete_inbox_message(self) -> None:
         tree = self._inbox_tree
@@ -1947,6 +2085,8 @@ class RadarApp:
         self._reload_inbox()
 
     def _show_inbox_payload(self, _event: object = None) -> None:
+        if self._inbox_reloading:
+            return
         tree = self._inbox_tree
         if tree is None:
             return
@@ -1978,7 +2118,7 @@ class RadarApp:
     def on_close(self) -> None:
         self._user_stop = True
         self.listening = False
-        self._shutdown_client()
+        self._shutdown_all()
         self.inbox.close()
         try:
             broker = self.read_form()

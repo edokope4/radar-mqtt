@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime
@@ -35,6 +36,41 @@ class InboxStoreTest(unittest.TestCase):
         self.assertEqual(rows[0].topico, "cl/kope/iot/cafetera/alive")
         self.assertEqual(rows[0].payload, '{"status": "alive"}')
         self.assertEqual(rows[0].qos, 1)
+        self.assertEqual(rows[0].broker, "")
+
+    def test_stores_the_broker(self) -> None:
+        self.store.record("topico", "payload", 0, broker="HiveMQ", now=self.now)
+        rows = self.store.list_messages(self.now)
+        self.assertEqual(rows[0].broker, "HiveMQ")
+
+    def test_adds_broker_to_an_existing_table(self) -> None:
+        path = Path(self._temp.name) / "old.db"
+        connection = sqlite3.connect(path)
+        connection.execute(
+            """
+            CREATE TABLE INBOX (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fecha_recepcion TEXT NOT NULL,
+                topico TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                qos INTEGER NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO INBOX (fecha_recepcion, topico, payload, qos) VALUES ('2026-10-03 12:00:00.000', 't', 'p', 0)"
+        )
+        connection.commit()
+        connection.close()
+        store = InboxStore(path)
+        try:
+            previous = store.list_messages(self.now)
+            self.assertEqual(previous[0].broker, "")
+            store.record("nuevo", "payload", 1, broker="[Dev] Sonda", now=self.now)
+            stored = [row for row in store.list_messages(self.now) if row.topico == "nuevo"]
+            self.assertEqual(stored[0].broker, "[Dev] Sonda")
+        finally:
+            store.close()
 
     def test_keeps_only_the_last_month_and_lists_newest_first(self) -> None:
         self.store.record("viejo", "fuera", 0, received_at=datetime(2026, 9, 3, 11, 59, 59), now=self.now)

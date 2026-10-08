@@ -17,6 +17,7 @@ def format_stamp(moment: datetime) -> str:
 class InboxRow:
     id: int
     fecha_recepcion: str
+    broker: str
     topico: str
     payload: str
     qos: int
@@ -43,12 +44,16 @@ class InboxStore:
             CREATE TABLE IF NOT EXISTS INBOX (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 fecha_recepcion TEXT NOT NULL,
+                broker TEXT NOT NULL DEFAULT '',
                 topico TEXT NOT NULL,
                 payload TEXT NOT NULL,
                 qos INTEGER NOT NULL
             )
             """
         )
+        columns = {str(row["name"]) for row in self._conn.execute("PRAGMA table_info(INBOX)")}
+        if "broker" not in columns:
+            self._conn.execute("ALTER TABLE INBOX ADD COLUMN broker TEXT NOT NULL DEFAULT ''")
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_inbox_fecha ON INBOX (fecha_recepcion)"
         )
@@ -63,6 +68,7 @@ class InboxStore:
         payload: str,
         qos: int,
         *,
+        broker: str = "",
         received_at: datetime | None = None,
         now: datetime | None = None,
     ) -> None:
@@ -70,8 +76,8 @@ class InboxStore:
         moment = received_at or current
         stored_qos = max(0, min(2, int(qos)))
         self._conn.execute(
-            "INSERT INTO INBOX (fecha_recepcion, topico, payload, qos) VALUES (?, ?, ?, ?)",
-            (format_stamp(moment), topico, payload, stored_qos),
+            "INSERT INTO INBOX (fecha_recepcion, broker, topico, payload, qos) VALUES (?, ?, ?, ?, ?)",
+            (format_stamp(moment), broker, topico, payload, stored_qos),
         )
         self._purge(current)
         self._conn.commit()
@@ -82,7 +88,7 @@ class InboxStore:
         self._conn.commit()
         rows = self._conn.execute(
             """
-            SELECT id, fecha_recepcion, topico, payload, qos
+            SELECT id, fecha_recepcion, broker, topico, payload, qos
             FROM INBOX
             ORDER BY fecha_recepcion DESC, id DESC
             """
@@ -91,6 +97,7 @@ class InboxStore:
             InboxRow(
                 id=int(row["id"]),
                 fecha_recepcion=str(row["fecha_recepcion"]),
+                broker=str(row["broker"] or ""),
                 topico=str(row["topico"]),
                 payload=str(row["payload"]),
                 qos=int(row["qos"]),

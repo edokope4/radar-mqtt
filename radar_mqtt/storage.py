@@ -34,6 +34,7 @@ class Broker:
     client_id: str = "radar-mqtt"
     topics: list[Topic] = field(default_factory=lambda: [Topic("cafetera/hacer")])
     qos: int = 0
+    listen: bool = False
 
 
 @dataclass
@@ -120,6 +121,7 @@ def _broker_from_dict(raw: dict) -> Broker:
         client_id=str(raw.get("client_id") or "radar-mqtt"),
         topics=topics,
         qos=max(0, min(2, int(raw.get("qos") or 0))),
+        listen=bool(raw.get("listen", False)),
     )
 
 
