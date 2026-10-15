@@ -264,6 +264,8 @@ class RadarApp:
         self._inbox_reloading = False
         self._inbox_tree: ttk.Treeview | None = None
         self._inbox_detail: tk.Text | None = None
+        self._inbox_copy: tk.Button | None = None
+        self._inbox_copy_text = ""
         self._inbox_count: tk.Label | None = None
         self._inbox_payloads: dict[str, str] = {}
         self._inbox_split: tk.PanedWindow | None = None
@@ -1967,8 +1969,30 @@ class RadarApp:
 
         viewer = tk.Frame(split, bg=theme.field, highlightbackground=theme.line, highlightthickness=1)
         viewer.radar_role = "field"
-        viewer.rowconfigure(0, weight=1)
+        viewer.rowconfigure(1, weight=1)
         viewer.columnconfigure(0, weight=1)
+        detail_bar = tk.Frame(viewer, bg=theme.field)
+        detail_bar.radar_role = "field"
+        detail_bar.grid(row=0, column=0, columnspan=2, sticky="ew")
+        copy = tk.Button(
+            detail_bar,
+            text="Copiar",
+            font=("Segoe UI", 9),
+            fg=theme.accent,
+            bg=theme.field,
+            activeforeground=theme.accent_dark,
+            activebackground=theme.copy_active,
+            relief="flat",
+            bd=1,
+            padx=8,
+            pady=1,
+            cursor="hand2",
+            state="disabled",
+            command=self._copy_inbox_payload,
+        )
+        copy.radar_role = "field-button"
+        copy.pack(side="right", padx=6, pady=4)
+        self._inbox_copy = copy
         detail = tk.Text(
             viewer,
             height=12,
@@ -1983,11 +2007,11 @@ class RadarApp:
             cursor="xterm",
         )
         detail.radar_role = "field"
-        detail.grid(row=0, column=0, sticky="nsew")
+        detail.grid(row=1, column=0, sticky="nsew")
         detail_scroll_y = ttk.Scrollbar(viewer, orient="vertical", command=detail.yview)
-        detail_scroll_y.grid(row=0, column=1, sticky="ns")
+        detail_scroll_y.grid(row=1, column=1, sticky="ns")
         detail_scroll_x = ttk.Scrollbar(viewer, orient="horizontal", command=detail.xview)
-        detail_scroll_x.grid(row=1, column=0, sticky="ew")
+        detail_scroll_x.grid(row=2, column=0, sticky="ew")
         detail.configure(yscrollcommand=detail_scroll_y.set, xscrollcommand=detail_scroll_x.set)
         detail.configure(state="disabled")
         detail.bind("<Key>", self._guard_log)
@@ -2096,12 +2120,21 @@ class RadarApp:
             return
         self._set_inbox_detail(self._inbox_payloads.get(selected[0], ""))
 
+    def _copy_inbox_payload(self) -> None:
+        button = self._inbox_copy
+        if button is None or not self._inbox_copy_text:
+            return
+        self._copy_payload(self._inbox_copy_text, button)
+
     def _set_inbox_detail(self, text: str) -> None:
         detail = self._inbox_detail
         if detail is None or not detail.winfo_exists():
             return
         formatted = pretty_json_lines(text) if text else None
         shown = formatted if formatted is not None else text
+        self._inbox_copy_text = shown
+        if self._inbox_copy is not None and self._inbox_copy.winfo_exists():
+            self._inbox_copy.configure(state="normal" if shown else "disabled", text="Copiar")
         detail.configure(state="normal")
         detail.delete("1.0", "end")
         if shown and formatted is not None:

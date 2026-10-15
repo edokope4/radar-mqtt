@@ -1,8 +1,8 @@
 # Radar MQTT — estado del desarrollo
 
-Documento para retomar el trabajo. Actualizado el 3 de octubre de 2026.
+Documento para retomar el trabajo. Actualizado el 15 de octubre de 2026.
 
-Cliente de Windows para escuchar un broker MQTT y publicar mensajes. La interfaz es Tkinter y la conexión usa Eclipse Paho (`paho-mqtt`).
+Cliente de Windows, versión 1.0.0, para escuchar varios brokers MQTT y publicar mensajes. La interfaz es Tkinter y la conexión usa Eclipse Paho (`paho-mqtt`).
 
 Repositorio: https://github.com/edokope4/radar-mqtt
 
@@ -10,20 +10,25 @@ La app Android que publica el pedido está en `C:\develop\cafetera`. El servicio
 
 ## Qué hace
 
-No se conecta al abrirse. Hay que pulsar **Comenzar a escuchar**.
+No se conecta al abrirse. Hay que pulsar **Comenzar a escuchar**, el botón fijo al pie de la ventana.
 
-- Brokers guardados: nombre, host, puerto, usuario, contraseña, TLS, identificador de cliente, tópicos (uno por línea, se pueden desactivar) y QoS. El puerto habitual es 1883 sin TLS y 8883 con TLS.
-- Payloads guardados con nombre. Si el texto del mensaje coincide, el registro lo marca con ese nombre. **Mostrar solo estos payloads** oculta el resto.
-- Ventana de publicación: broker, tópico, QoS, retain y cuerpo del mensaje.
-- Favoritos de publicación. Guardan nombre, broker, tópico, cuerpo, QoS y retain. **Guardar en favoritos** pide el nombre y, si ya existe, pregunta si se reemplaza. **Cargar** rellena el formulario. **Quitar** borra el favorito elegido. Si el broker de ese favorito ya no existe, se carga el resto y se avisa.
-- Registro SQLite del último mes. Cada mensaje recibido guarda `fecha_recepcion`, `topico`, `payload` y `qos` en la tabla `INBOX`. Lo más viejo que un mes calendario se borra al guardar o al abrir la lista. El botón **Archivo** abre otra ventana con la tabla. La mitad inferior muestra el mensaje elegido: si es JSON, va indentado y con saltos de línea. La ventana principal sigue mostrando solo el registro en vivo.
-- Tema oscuro, guardado en la configuración. También se puede exportar e importar el JSON de ajustes.
+La ventana es un `ttk.Notebook` con cinco pestañas: **Brokers**, **Escuchar**, **Publicar**, **Mensajes Recibidos** y **Archivo**. El menú **Ver** abre esas pestañas, cambia el tema y muestra **Acerca de...** (nombre, versión `radar_mqtt.__version__`, autor DeContrabando.cl y el enlace de GitHub).
+
+- Brokers guardados: nombre, host, puerto, usuario, contraseña, TLS, identificador de cliente, tópicos y QoS. Cada tópico es una fila con checkbox. Desmarcarlo no lo borra. El puerto habitual es 1883 sin TLS y 8883 con TLS.
+- **Escuchar** lista los brokers guardados. Solo se conectan los marcados, y cada uno necesita al menos un tópico activo. La marca es `Broker.listen` y se guarda en el JSON. Un broker nuevo queda desmarcado. Cada conexión tiene su propia sesión (`_ListenSession`) y su cliente en `self.clients`. Si uno falla, los demás siguen. Publicar usa otro client id, `{client_id}-pub-{6 hex}`, para no echar a los que escuchan.
+- Si el broker rechaza una suscripción, ese tópico se deja de escuchar. En MQTT 3.1.1 un SUBACK denegado cierra la sesión.
+- Publicación: broker, tópico, QoS, retain y cuerpo. Los favoritos guardan nombre, broker, tópico, cuerpo, QoS y retain. **Guardar en favoritos** pide el nombre y, si ya existe, pregunta si se reemplaza. **Cargar** rellena el formulario. **Quitar** borra el favorito elegido. Si el broker de ese favorito ya no existe, se carga el resto y se avisa.
+- **Mensajes Recibidos** muestra `HH:MM:SS`, el broker y el tópico. El JSON va en una línea, coloreado. Cada mensaje tiene **Copiar**, que copia ese texto ya formateado. Si el cuerpo coincide exactamente con un payload con nombre de la configuración, el encabezado agrega ese nombre. Ya no hay pantalla para editar esos payloads ni el interruptor **Mostrar solo estos payloads**. La clave `only_saved_payloads` puede seguir en el JSON y la interfaz no la usa.
+- **Archivo** es una pestaña, no una ventana aparte. La lista y el detalle se parten con un `PanedWindow` vertical. Columnas: `fecha_recepcion`, `broker`, `topico`, `payload` y `qos`. La hora guardada es `YYYY-MM-DD HH:MM:SS.mmm`. Al recargar, la fila seleccionada sigue seleccionada y el detalle no se borra. El detalle muestra texto plano o JSON indentado, y **Copiar** copia ese texto. **Borrar** (también Supr) y **Limpiar todo** piden confirmación.
+- Tema claro: botones `#6577E2` y detalles `#E2CF65`. Tema oscuro: esos papeles se invierten sobre fondo gris `#3E3E3E`. El ícono de la ventana es `radar.png` y el del ejecutable es `radar.ico`.
 
 ## Dónde se guardan los datos
 
-`%APPDATA%\RadarMqtt\config.json` guarda brokers, payloads y favoritos. `%APPDATA%\RadarMqtt\inbox.db` guarda la tabla `INBOX`. Ninguno de los dos está en el repositorio.
+`%APPDATA%\RadarMqtt\config.json` guarda brokers, payloads, favoritos y el tema. `%APPDATA%\RadarMqtt\inbox.db` guarda la tabla `INBOX`. Ninguno de los dos está en el repositorio. `radar-mqtt.json`, en la raíz del proyecto, es una exportación local y tampoco se commitea.
 
-Una configuración vieja, sin la clave `favorites`, se abre con la lista de favoritos vacía.
+Una base creada antes de la columna `broker` la recibe con `ALTER TABLE`. Esas filas quedan con `broker` vacío.
+
+Una configuración vieja, sin la clave `favorites`, se abre con la lista de favoritos vacía. Sin la clave `listen`, el broker queda desmarcado.
 
 El primer inicio crea un broker de ejemplo (`broker.hivemq.com`, tópico `cafetera/hacer`, payload `hacer`, nombre «Hacer café»). Ese ejemplo no coincide con el contrato actual de la cafetera:
 
@@ -38,25 +43,28 @@ Para ver el pulso hay que poner esos tópicos en Radar, o guardarlos como favori
 ## Ejecutar
 
 ```powershell
-cd C:\develop\radar-mqtt
+cd C:\develop\src\kp\radar-mqtt
 py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe main.py
 ```
 
+No llamar `on_close` ni cambiar el tema en una prueba: ambos guardan `%APPDATA%\RadarMqtt\config.json`. Para cerrar una ventana de prueba, usar `root.destroy()`.
+
 ## Ejecutable
 
 ```powershell
-cd C:\develop\radar-mqtt
+cd C:\develop\src\kp\radar-mqtt
 .\build.bat
 ```
 
-`build.bat` crea `.venv`, instala las dependencias y genera `dist\RadarMqtt.exe` con PyInstaller. Si el exe está abierto, el empaquetado no puede reemplazarlo. Hay que cerrar Radar MQTT y volver a ejecutar `build.bat`. El exe que quedó de una compilación anterior no incluye los favoritos hasta que se regenere.
+`build.bat` crea `.venv`, instala las dependencias y genera `dist\RadarMqtt.exe` con PyInstaller (`--icon radar.ico` y `radar.png` como dato). Si el exe está abierto, el empaquetado no puede reemplazarlo. Hay que cerrar Radar MQTT y volver a ejecutar `build.bat`. No lanzar `build.bat` sin alguien delante: termina en `pause`. El lanzador `pyinstaller.exe` del venv puede apuntar a una ruta vieja; el script usa `python.exe -m PyInstaller`.
 
-Código: `main.py`, `radar_mqtt/app.py`, `radar_mqtt/storage.py`, `radar_mqtt/inbox.py`. La retención del mes se prueba con `py -3 -m unittest discover -s tests`.
+Código: `main.py`, `radar_mqtt/app.py`, `radar_mqtt/storage.py`, `radar_mqtt/inbox.py`. La retención del mes, el borrado y la columna `broker` se prueban con `py -3 -m unittest discover -s tests`.
 
 ## Pendiente
 
 - El broker de ejemplo y el payload «Hacer café» siguen en `cafetera/hacer` / `hacer`.
-- Parte de los textos viejos de la interfaz usa voseo («Elegí», «Escribí»). Los de favoritos están en español neutro.
+- Los payloads con nombre ya no se editan en la interfaz. Siguen en el JSON y solo sirven para rotular el registro en vivo.
+- Parte de los textos de la interfaz usa voseo («Elegí», «Marcá»).
 - Licencia BSD 2-Clause, en `LICENSE`.
