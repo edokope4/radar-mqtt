@@ -26,7 +26,7 @@ La ventana no se conecta al abrirse. Abajo está **Comenzar a escuchar**. El men
 3. En **Escuchar**, marcá los brokers que deben conectarse. **Comenzar a escuchar** usa solo esos, y omite los que no tengan un tópico activo. La marca se guarda.
 4. En **Publicar**, elegí broker, tópico, QoS, si el mensaje queda retenido, y el cuerpo. **Guardar en favoritos** pide un nombre. **Cargar** rellena el formulario. **Quitar** borra el favorito elegido.
 5. **Mensajes Recibidos** muestra la hora, el broker y el tópico. Si el cuerpo es JSON, se ve en una línea y con color. **Copiar** copia ese texto. Si el cuerpo coincide exactamente con un payload con nombre guardado en la configuración, el registro muestra ese nombre. El primer inicio incluye el ejemplo «Hacer café» para el texto `hacer`.
-6. **Archivo** lista el último mes. La hora de recepción incluye milisegundos. Abajo se ve el mensaje elegido, en texto plano o como JSON indentado. **Copiar** copia lo que se está viendo. **Borrar** quita el mensaje seleccionado y **Limpiar todo** vacía la lista. La selección se mantiene cuando la lista se actualiza.
+6. **Archivo** lista el último mes. La hora de recepción incluye milisegundos. Abajo se ve el mensaje elegido, en texto plano o como JSON indentado. **Copiar** copia lo que se está viendo. Junto al visor está el MD5 del payload recibido: si dos mensajes tienen el mismo código, el contenido es el mismo. **Borrar** quita el mensaje seleccionado y **Limpiar todo** vacía la lista. La selección se mantiene cuando la lista se actualiza.
 
 Los límites entre la lista y el detalle de **Archivo** se pueden arrastrar. Si el contenido no entra, aparece una barra de desplazamiento.
 

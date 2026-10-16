@@ -1,6 +1,6 @@
 # Radar MQTT — estado del desarrollo
 
-Documento para retomar el trabajo. Actualizado el 15 de octubre de 2026.
+Documento para retomar el trabajo. Actualizado el 16 de octubre de 2026.
 
 Cliente de Windows, versión 1.0.0, para escuchar varios brokers MQTT y publicar mensajes. La interfaz es Tkinter y la conexión usa Eclipse Paho (`paho-mqtt`).
 
@@ -19,7 +19,7 @@ La ventana es un `ttk.Notebook` con cinco pestañas: **Brokers**, **Escuchar**, 
 - Si el broker rechaza una suscripción, ese tópico se deja de escuchar. En MQTT 3.1.1 un SUBACK denegado cierra la sesión.
 - Publicación: broker, tópico, QoS, retain y cuerpo. Los favoritos guardan nombre, broker, tópico, cuerpo, QoS y retain. **Guardar en favoritos** pide el nombre y, si ya existe, pregunta si se reemplaza. **Cargar** rellena el formulario. **Quitar** borra el favorito elegido. Si el broker de ese favorito ya no existe, se carga el resto y se avisa.
 - **Mensajes Recibidos** muestra `HH:MM:SS`, el broker y el tópico. El JSON va en una línea, coloreado. Cada mensaje tiene **Copiar**, que copia ese texto ya formateado. Si el cuerpo coincide exactamente con un payload con nombre de la configuración, el encabezado agrega ese nombre. Ya no hay pantalla para editar esos payloads ni el interruptor **Mostrar solo estos payloads**. La clave `only_saved_payloads` puede seguir en el JSON y la interfaz no la usa.
-- **Archivo** es una pestaña, no una ventana aparte. La lista y el detalle se parten con un `PanedWindow` vertical. Columnas: `fecha_recepcion`, `broker`, `topico`, `payload` y `qos`. La hora guardada es `YYYY-MM-DD HH:MM:SS.mmm`. Al recargar, la fila seleccionada sigue seleccionada y el detalle no se borra. El detalle muestra texto plano o JSON indentado, y **Copiar** copia ese texto. **Borrar** (también Supr) y **Limpiar todo** piden confirmación.
+- **Archivo** es una pestaña, no una ventana aparte. La lista y el detalle se parten con un `PanedWindow` vertical. Columnas: `fecha_recepcion`, `broker`, `topico`, `payload` y `qos`. La hora guardada es `YYYY-MM-DD HH:MM:SS.mmm`. Al recargar, la fila seleccionada sigue seleccionada y el detalle no se borra. El detalle muestra texto plano o JSON indentado, y **Copiar** copia ese texto. En la misma barra está el MD5 del payload guardado, en hexadecimal. El cálculo usa el texto recibido, no el JSON indentado de la pantalla. **Borrar** (también Supr) y **Limpiar todo** piden confirmación.
 - Tema claro: botones `#6577E2` y detalles `#E2CF65`. Tema oscuro: esos papeles se invierten sobre fondo gris `#3E3E3E`. El ícono de la ventana es `radar.png` y el del ejecutable es `radar.ico`.
 
 ## Dónde se guardan los datos

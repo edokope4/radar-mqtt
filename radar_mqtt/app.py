@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import json
 import os
 import queue
@@ -106,6 +107,10 @@ DARK = Theme(
     on_button="#1C1808",
     on_detail="#FFFFFF",
 )
+
+
+def payload_md5(text: str) -> str:
+    return hashlib.md5(text.encode("utf-8")).hexdigest()
 
 
 def pretty_json(text: str) -> str | None:
@@ -271,6 +276,7 @@ class RadarApp:
         self._inbox_split: tk.PanedWindow | None = None
 
         self.root = tk.Tk()
+        self._inbox_hash_var = tk.StringVar()
         self.root.radar_role = "panel"
         self.root.title("Radar MQTT")
         apply_icon(self.root)
@@ -382,6 +388,8 @@ class RadarApp:
             widget.configure(bg=theme.bg, fg=theme.ok)
         elif role == "status":
             widget.configure(bg=theme.bg, fg=getattr(theme, self._status_role))
+        elif role == "field-muted":
+            widget.configure(bg=theme.field, fg=theme.muted)
         elif role == "field":
             options = {"bg": theme.field}
             keys = set(widget.keys())
@@ -1993,6 +2001,23 @@ class RadarApp:
         copy.radar_role = "field-button"
         copy.pack(side="right", padx=6, pady=4)
         self._inbox_copy = copy
+        hash_label = tk.Label(
+            detail_bar,
+            text="MD5",
+            bg=theme.field,
+            fg=theme.muted,
+            font=("Segoe UI", 9),
+        )
+        hash_label.radar_role = "field-muted"
+        hash_label.pack(side="left", padx=(8, 6), pady=4)
+        hash_value = ttk.Entry(
+            detail_bar,
+            textvariable=self._inbox_hash_var,
+            width=34,
+            font=("Consolas", 10),
+            state="readonly",
+        )
+        hash_value.pack(side="left", fill="x", expand=True, pady=4, padx=(0, 8))
         detail = tk.Text(
             viewer,
             height=12,
@@ -2133,6 +2158,7 @@ class RadarApp:
         formatted = pretty_json_lines(text) if text else None
         shown = formatted if formatted is not None else text
         self._inbox_copy_text = shown
+        self._inbox_hash_var.set(payload_md5(text) if text else "")
         if self._inbox_copy is not None and self._inbox_copy.winfo_exists():
             self._inbox_copy.configure(state="normal" if shown else "disabled", text="Copiar")
         detail.configure(state="normal")
