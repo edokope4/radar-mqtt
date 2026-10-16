@@ -267,6 +267,7 @@ class RadarApp:
         self._status_role = "muted"
         self.inbox = InboxStore()
         self._inbox_reloading = False
+        self._syncing_topics = False
         self._inbox_tree: ttk.Treeview | None = None
         self._inbox_detail: tk.Text | None = None
         self._inbox_copy: tk.Button | None = None
@@ -1223,6 +1224,8 @@ class RadarApp:
         return [Topic(name, bool(variable.get())) for _row, name, variable, _check, _remove in self._topic_rows]
 
     def _toggle_topic(self, _name: str) -> None:
+        if self._syncing_topics:
+            return
         self._persist_topics()
 
     def _build_listen_choices(self, parent: tk.Misc) -> ttk.Frame:
@@ -1231,7 +1234,7 @@ class RadarApp:
         outer.rowconfigure(1, weight=1)
         hint = tk.Label(
             outer,
-            text="Marcá los brokers que se conectarán al escuchar.",
+            text="Marcá los brokers que se conectarán y, en cada uno, los tópicos que se escucharán.",
             bg=self.theme.bg,
             fg=self.theme.muted,
             font=("Segoe UI", 10),
@@ -1241,34 +1244,38 @@ class RadarApp:
         shell, listing = self._scrollable(outer)
         shell.grid(row=1, column=0, sticky="nsew")
         self._listen_list = listing
-        self._listen_rows: list[tuple[tk.Frame, str, tk.BooleanVar, ttk.Checkbutton]] = []
+        self._listen_rows: list[tuple[tk.Frame, str, tk.BooleanVar, ttk.Checkbutton, list[ttk.Checkbutton]]] = []
         return outer
 
     def _refresh_listen_choices(self) -> None:
         listing = getattr(self, "_listen_list", None)
         if listing is None or not listing.winfo_exists():
             return
-        for row, _broker_id, _variable, _check in self._listen_rows:
+        for row, _broker_id, _variable, _check, _topics in self._listen_rows:
             row.destroy()
         self._listen_rows = []
         for broker in self.settings.brokers:
             self._add_listen_row(broker)
 
     def _add_listen_row(self, broker: Broker) -> None:
-        row = tk.Frame(self._listen_list, bg=self.theme.bg)
-        row.radar_role = "panel"
-        row.pack(fill="x", pady=2)
+        block = tk.Frame(self._listen_list, bg=self.theme.bg)
+        block.radar_role = "panel"
+        block.pack(fill="x", pady=(0, 10))
+        header = tk.Frame(block, bg=self.theme.bg)
+        header.radar_role = "panel"
+        header.pack(fill="x")
         variable = tk.BooleanVar(value=broker.listen)
-        check = ttk.Checkbutton(row, variable=variable, command=lambda broker_id=broker.id, flag=variable: self._toggle_listen_choice(broker_id, flag))
+        check = ttk.Checkbutton(
+            header,
+            variable=variable,
+            command=lambda broker_id=broker.id, flag=variable: self._toggle_listen_choice(broker_id, flag),
+        )
         check.pack(side="left")
         if self.listening:
             check.configure(state="disabled")
-        detail = self._broker_label(broker)
-        if not enabled_topic_names(broker.topics):
-            detail += "    ·    sin tópicos activos"
         label = tk.Label(
-            row,
-            text=detail,
+            header,
+            text=self._broker_label(broker),
             bg=self.theme.bg,
             fg=self.theme.ink,
             anchor="w",
@@ -1276,7 +1283,56 @@ class RadarApp:
         )
         label.radar_role = "ink"
         label.pack(side="left", fill="x", expand=True, padx=(4, 0))
-        self._listen_rows.append((row, broker.id, variable, check))
+        topics = tk.Frame(block, bg=self.theme.field, highlightbackground=self.theme.line, highlightthickness=1)
+        topics.radar_role = "field"
+        topics.pack(fill="x", padx=(28, 0), pady=(4, 0))
+        topic_checks: list[ttk.Checkbutton] = []
+        if broker.topics:
+            for topic in broker.topics:
+                topic_checks.append(self._add_listen_topic(topics, broker.id, topic))
+        else:
+            empty = tk.Label(
+                topics,
+                text="Sin tópicos. Agregalos en Brokers.",
+                bg=self.theme.field,
+                fg=self.theme.muted,
+                anchor="w",
+                font=("Segoe UI", 10),
+            )
+            empty.radar_role = "field-muted"
+            empty.pack(fill="x", padx=8, pady=4)
+        self._listen_rows.append((block, broker.id, variable, check, topic_checks))
+
+    def _add_listen_topic(self, parent: tk.Misc, broker_id: str, topic: Topic) -> ttk.Checkbutton:
+        row = tk.Frame(parent, bg=self.theme.field)
+        row.radar_role = "field"
+        row.pack(fill="x", padx=4, pady=1)
+        variable = tk.BooleanVar(value=topic.enabled)
+        check = ttk.Checkbutton(
+            row,
+            variable=variable,
+            style="Field.TCheckbutton",
+            command=lambda name=topic.name, flag=variable: self._toggle_listen_topic(broker_id, name, flag),
+        )
+        check.pack(side="left")
+        if self.listening:
+            check.configure(state="disabled")
+        label = tk.Label(
+            row,
+            text=topic.name,
+            bg=self.theme.field,
+            fg=self.theme.ink if topic.enabled else self.theme.muted,
+            anchor="w",
+            font=("Segoe UI", 10),
+        )
+        label.radar_role = "topic"
+        label.radar_enabled = variable
+        label.pack(side="left", fill="x", expand=True, padx=(4, 8))
+        variable.trace_add(
+            "write",
+            lambda *_args: label.configure(fg=self.theme.ink if variable.get() else self.theme.muted),
+        )
+        return check
 
     def _toggle_listen_choice(self, broker_id: str, variable: tk.BooleanVar) -> None:
         broker = self._broker_by_id(broker_id)
@@ -1285,12 +1341,32 @@ class RadarApp:
         broker.listen = bool(variable.get())
         save_settings(self.settings)
 
+    def _toggle_listen_topic(self, broker_id: str, name: str, variable: tk.BooleanVar) -> None:
+        broker = self._broker_by_id(broker_id)
+        if broker is None:
+            return
+        enabled = bool(variable.get())
+        for topic in broker.topics:
+            if topic.name == name:
+                topic.enabled = enabled
+        save_settings(self.settings)
+        if self._draft_id != broker_id:
+            return
+        self._syncing_topics = True
+        try:
+            for _row, current, form_var, _check, _remove in self._topic_rows:
+                if current == name and bool(form_var.get()) != enabled:
+                    form_var.set(enabled)
+        finally:
+            self._syncing_topics = False
+
     def _persist_topics(self) -> None:
         broker = self._broker_by_id(self._draft_id)
         if broker is None:
             return
         broker.topics = self._topics_from_rows()
         save_settings(self.settings)
+        self._refresh_listen_choices()
 
     def add_topic(self) -> None:
         name = self.topic_var.get().strip()
@@ -1776,8 +1852,10 @@ class RadarApp:
         self.port_entry.configure(state=state)
         self.qos_entry.configure(state=state)
         self.tls_check.configure(state=state)
-        for _row, _broker_id, _variable, check in self._listen_rows:
+        for _row, _broker_id, _variable, check, topic_checks in self._listen_rows:
             check.configure(state=state)
+            for topic_check in topic_checks:
+                topic_check.configure(state=state)
         self.topic_entry.configure(state=state)
         self.add_topic_button.configure(state=state)
         for _frame, _name, _var, check, remove in self._topic_rows:
