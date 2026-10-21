@@ -1,6 +1,6 @@
 # Radar MQTT — estado del desarrollo
 
-Documento para retomar el trabajo. Actualizado el 16 de octubre de 2026.
+Documento para retomar el trabajo. Actualizado el 20 de octubre de 2026.
 
 Cliente de Windows, versión 1.0.0, para escuchar varios brokers MQTT y publicar mensajes. La interfaz es Tkinter y la conexión usa Eclipse Paho (`paho-mqtt`).
 
@@ -10,15 +10,15 @@ La app Android que publica el pedido está en `C:\develop\cafetera`. El servicio
 
 ## Qué hace
 
-No se conecta al abrirse. Hay que pulsar **Comenzar a escuchar**, el botón fijo al pie de la ventana.
+La escucha no arranca al abrirse. **Comenzar a escuchar** conecta un cliente por cada broker marcado en **Escuchar** y se suscribe a sus tópicos activos. El envío no arranca solo: en **Publicar** hay que pulsar **Conectar**.
 
-La ventana es un `ttk.Notebook` con cinco pestañas: **Brokers**, **Escuchar**, **Publicar**, **Mensajes Recibidos** y **Archivo**. El menú **Ver** abre esas pestañas, cambia el tema y muestra **Acerca de...** (nombre, versión `radar_mqtt.__version__`, autor DeContrabando.cl y el enlace de GitHub).
+La ventana es un `ttk.Notebook` con cinco pestañas: **Brokers**, **Escuchar**, **Publicar**, **Console** y **Archivo**. El menú **Ver** abre esas pestañas, cambia el tema y muestra **Acerca de...** (nombre, versión `radar_mqtt.__version__`, autor DeContrabando.cl y el enlace de GitHub).
 
 - Brokers guardados: nombre, host, puerto, usuario, contraseña, TLS, identificador de cliente, tópicos y QoS. Cada tópico es una fila con checkbox. Desmarcarlo no lo borra. El puerto habitual es 1883 sin TLS y 8883 con TLS.
-- **Escuchar** lista los brokers guardados y, debajo de cada uno, sus tópicos con checkbox. Es el mismo `Topic.enabled` que la pestaña **Brokers**: marcar en una actualiza la otra. Solo se conectan los brokers con `listen` y al menos un tópico activo. Un broker nuevo queda desmarcado. Cada conexión tiene su propia sesión (`_ListenSession`) y su cliente en `self.clients`. Si uno falla, los demás siguen. Publicar usa otro client id, `{client_id}-pub-{6 hex}`, para no echar a los que escuchan.
+- **Escuchar** lista los brokers guardados y, debajo de cada uno, sus tópicos con checkbox. Es el mismo `Topic.enabled` que la pestaña **Brokers**: marcar en una actualiza la otra. Solo se conectan los brokers con `listen` y al menos un tópico activo. Un broker nuevo queda desmarcado. Cada conexión tiene su propia sesión (`_ListenSession`) y su cliente en `self.clients`. Si uno falla, los demás siguen. Publicar usa otro cliente, con id `{client_id}-pub`, para no echar a los que escuchan.
 - Si el broker rechaza una suscripción, ese tópico se deja de escuchar. En MQTT 3.1.1 un SUBACK denegado cierra la sesión.
-- Publicación: broker, tópico, QoS, retain y cuerpo. Los favoritos guardan nombre, broker, tópico, cuerpo, QoS y retain. **Guardar en favoritos** pide el nombre y, si ya existe, pregunta si se reemplaza. **Cargar** rellena el formulario. **Quitar** borra el favorito elegido. Si el broker de ese favorito ya no existe, se carga el resto y se avisa.
-- **Mensajes Recibidos** muestra `HH:MM:SS`, el broker y el tópico. El JSON va en una línea, coloreado. Cada mensaje tiene **Copiar**, que copia ese texto ya formateado. Si el cuerpo coincide exactamente con un payload con nombre de la configuración, el encabezado agrega ese nombre. Ya no hay pantalla para editar esos payloads ni el interruptor **Mostrar solo estos payloads**. La clave `only_saved_payloads` puede seguir en el JSON y la interfaz no la usa.
+- Publicación: broker, tópico, QoS, retain y cuerpo. **Conectar** abre el cliente de envío y lo deja abierto; **Publicar** lo reutiliza. **Desconectar** lo cierra. Si cambia el host, el puerto, el usuario, la contraseña, TLS o el client id, hay que volver a conectar. Si se corta, reconecta sola. Los favoritos guardan nombre, broker, tópico, cuerpo, QoS y retain. **Guardar en favoritos** pide el nombre y, si ya existe, pregunta si se reemplaza. **Cargar** rellena el formulario. **Quitar** borra el favorito elegido. Si el broker de ese favorito ya no existe, se carga el resto y se avisa.
+- **Console** muestra `HH:MM:SS`, el broker y el tópico. También registra avisos de conexión y de publicación. El JSON va en una línea, coloreado. Cada mensaje tiene **Copiar**, que copia ese texto ya formateado. Si el cuerpo coincide exactamente con un payload con nombre de la configuración, el encabezado agrega ese nombre. Ya no hay pantalla para editar esos payloads ni el interruptor **Mostrar solo estos payloads**. La clave `only_saved_payloads` puede seguir en el JSON y la interfaz no la usa.
 - **Archivo** es una pestaña, no una ventana aparte. La lista y el detalle se parten con un `PanedWindow` vertical. Columnas: `fecha_recepcion`, `broker`, `topico`, `payload` y `qos`. La hora guardada es `YYYY-MM-DD HH:MM:SS.mmm`. Al recargar, la fila seleccionada sigue seleccionada y el detalle no se borra. El detalle muestra texto plano o JSON indentado, y **Copiar** copia ese texto. En la misma barra está el MD5 del payload guardado, en hexadecimal. El cálculo usa el texto recibido, no el JSON indentado de la pantalla. **Borrar** (también Supr) y **Limpiar todo** piden confirmación.
 - Tema claro: botones `#6577E2` y detalles `#E2CF65`. Tema oscuro: esos papeles se invierten sobre fondo gris `#3E3E3E`. El ícono de la ventana es `radar.png` y el del ejecutable es `radar.ico`.
 

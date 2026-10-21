@@ -9,6 +9,7 @@ import sys
 import webbrowser
 import sqlite3
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -263,6 +264,17 @@ class RadarApp:
         self._copy_buttons: list[tk.Button] = []
         self._publish_broker_id = ""
         self._publishing = False
+        self._publish_lock = threading.Lock()
+        self._publish_client: mqtt.Client | None = None
+        self._publish_broker_key = ""
+        self._publish_sig: tuple = ()
+        self._publish_broker_name = ""
+        self._publish_generation = 0
+        self._publish_connected = threading.Event()
+        self._publish_failure: str | None = None
+        self._publish_was_connected = False
+        self._publish_link_state = "idle"
+        self._publish_link_name = ""
         self.theme = DARK if settings.dark else LIGHT
         self._status_role = "muted"
         self.inbox = InboxStore()
@@ -375,6 +387,7 @@ class RadarApp:
         self._paint_inbox_tags()
         self._set_listening_ui(self.listening)
         self._set_status(self.status_label.cget("text"), self._status_role)
+        self._set_publish_link(self._publish_link_state, self._publish_link_name)
 
     def _paint(self, widget: tk.Misc) -> None:
         role = getattr(widget, "radar_role", None)
@@ -492,7 +505,7 @@ class RadarApp:
         self.notebook.add(brokers, text="Brokers")
         self.notebook.add(escuchar, text="Escuchar")
         self.notebook.add(publish, text="Publicar")
-        self.notebook.add(messages, text="Mensajes Recibidos")
+        self.notebook.add(messages, text="Console")
         self.notebook.add(archivo, text="Archivo")
         self._tabs = {
             "brokers": brokers,
@@ -528,23 +541,27 @@ class RadarApp:
         self._broker_menu = broker
 
         publish = self._menu(bar)
+        publish.add_command(label="Conectar envío", command=self._menu_connect_publish)
         publish.add_command(label="Publicar", command=self._menu_publish)
         publish.add_command(label="Guardar en favoritos", command=self._menu_save_favorite)
         bar.add_cascade(label="Publicar", menu=publish)
+        self._publish_menu = publish
+        self._publish_connect_menu_index = 0
 
         messages = self._menu(bar)
         messages.add_command(label="Comenzar a escuchar", command=self._menu_listen)
         self._listen_menu = messages
         self._listen_menu_index = messages.index("end")
+        messages.add_command(label="Console", command=lambda: self._show_tab("messages"))
         messages.add_command(label="Archivo", command=self._menu_open_inbox)
         messages.add_command(label="Limpiar", command=self._menu_clear_log)
-        bar.add_cascade(label="Mensajes", menu=messages)
+        bar.add_cascade(label="Console", menu=messages)
 
         view = self._menu(bar)
         view.add_command(label="Brokers", command=lambda: self._show_tab("brokers"))
         view.add_command(label="Escuchar", command=lambda: self._show_tab("escuchar"))
         view.add_command(label="Publicar", command=lambda: self._show_tab("publish"))
-        view.add_command(label="Mensajes Recibidos", command=lambda: self._show_tab("messages"))
+        view.add_command(label="Console", command=lambda: self._show_tab("messages"))
         view.add_command(label="Archivo", command=lambda: self._show_tab("archivo"))
         view.add_separator()
         view.add_checkbutton(label="Oscuro", variable=self.dark_var, command=self._toggle_theme)
@@ -567,6 +584,10 @@ class RadarApp:
 
     def _menu_edit_brokers(self) -> None:
         self._show_tab("brokers")
+
+    def _menu_connect_publish(self) -> None:
+        self._show_tab("publish")
+        self.toggle_publish_link()
 
     def _menu_publish(self) -> None:
         self._show_tab("publish")
@@ -759,7 +780,7 @@ class RadarApp:
         ttk.Label(extra, text="QoS").pack(side="left")
         self.qos_entry = ttk.Spinbox(extra, from_=0, to=2, textvariable=self.qos_var, width=4)
         self.qos_entry.pack(side="left", padx=(8, 16))
-        self.tls_check = ttk.Checkbutton(extra, text="TLS", variable=self.tls_var)
+        self.tls_check = ttk.Checkbutton(extra, text="TLS", variable=self.tls_var, command=self._on_tls_toggle)
         self.tls_check.pack(side="left")
 
         ttk.Label(frame, text="Tópicos").grid(row=7, column=0, sticky="w", pady=(8, 2))
@@ -880,6 +901,39 @@ class RadarApp:
         ttk.Button(favorite_actions, text="Guardar en favoritos", command=self.save_favorite).pack(side="left")
         ttk.Button(favorite_actions, text="Quitar", command=self.delete_favorite).pack(side="left", padx=8)
 
+        link_row = tk.Frame(frame, bg=self.theme.bg)
+        link_row.radar_role = "panel"
+        link_row.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        link_row.columnconfigure(1, weight=1)
+        self.publish_connect_button = tk.Button(
+            link_row,
+            text="Conectar",
+            command=self.toggle_publish_link,
+            bg=self.theme.button,
+            fg=self.theme.on_button,
+            activebackground=self.theme.button_dark,
+            activeforeground=self.theme.on_button,
+            highlightbackground=self.theme.line,
+            highlightcolor=self.theme.line,
+            highlightthickness=1,
+            font=("Segoe UI", 10, "bold"),
+            relief="flat",
+            padx=12,
+            pady=4,
+            cursor="hand2",
+        )
+        self.publish_connect_button.radar_role = "primary"
+        self.publish_connect_button.grid(row=0, column=0, sticky="w")
+        self.publish_link_label = tk.Label(
+            link_row,
+            text="Sin conexión de envío",
+            bg=self.theme.bg,
+            fg=self.theme.muted,
+            font=("Segoe UI", 10),
+            anchor="w",
+        )
+        self.publish_link_label.radar_role = "muted"
+        self.publish_link_label.grid(row=0, column=1, sticky="ew", padx=(12, 0))
         self.publish_button = tk.Button(
             frame,
             text="Publicar",
@@ -898,7 +952,7 @@ class RadarApp:
             cursor="hand2",
         )
         self.publish_button.radar_role = "primary"
-        self.publish_button.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        self.publish_button.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         return outer
 
     def _build_listen_bar(self, parent: tk.Misc) -> None:
@@ -1017,7 +1071,13 @@ class RadarApp:
         index = self.publish_broker_combo.current()
         if index < 0 or index >= len(self.settings.brokers):
             return
-        self._publish_broker_id = self.settings.brokers[index].id
+        broker = self.settings.brokers[index]
+        previous = self._publish_broker_id
+        self._publish_broker_id = broker.id
+        if previous and previous != broker.id:
+            self._close_publisher(previous)
+        elif self._publish_client is not None:
+            self._drop_publisher_if_changed(broker)
 
     def _read_publish(self) -> tuple[Broker, str, str, int, bool]:
         broker = self._broker_by_id(self._publish_broker_id)
@@ -1104,8 +1164,13 @@ class RadarApp:
         self.publish_payload.insert("1.0", favorite.body)
         broker = self._broker_by_id(favorite.broker_id)
         if broker is not None:
+            previous = self._publish_broker_id
             self._publish_broker_id = broker.id
             self._refresh_publish_brokers()
+            if previous and previous != broker.id:
+                self._close_publisher(previous)
+            elif self._publish_client is not None:
+                self._drop_publisher_if_changed(broker)
         elif favorite.broker_id:
             messagebox.showwarning(
                 "Radar MQTT",
@@ -1133,6 +1198,9 @@ class RadarApp:
         except ValueError as error:
             messagebox.showwarning("Radar MQTT", str(error))
             return
+        if not self._publisher_ready(broker):
+            messagebox.showwarning("Radar MQTT", "Conectá el cliente de envío antes de publicar.")
+            return
         self._publishing = True
         self.publish_button.configure(state="disabled", text="Publicando…")
         threading.Thread(
@@ -1141,12 +1209,250 @@ class RadarApp:
             daemon=True,
         ).start()
 
-    def _publish(self, broker: Broker, topic: str, payload: str, qos: int, retain: bool) -> None:
-        client_id = broker.client_id.strip() or "radar"
-        client = self._build_client(broker, client_id=f"{client_id}-pub-{uuid.uuid4().hex[:6]}", listen=False)
+    def toggle_publish_link(self) -> None:
+        if self._publish_link_state in {"connected", "connecting", "reconnecting"}:
+            self._close_publisher()
+            return
+        broker = self._broker_by_id(self._publish_broker_id)
+        if broker is None:
+            messagebox.showwarning("Radar MQTT", "Elegí un broker guardado.")
+            return
+        if not broker.host.strip():
+            messagebox.showwarning("Radar MQTT", "El broker no tiene host.")
+            return
+        if not self._confirm_tls_port(broker):
+            return
+        threading.Thread(target=self._arm_publisher_worker, args=(broker,), daemon=True).start()
+
+    def _on_tls_toggle(self) -> None:
         try:
-            client.connect(broker.host, broker.port, keepalive=30)
-            client.loop_start()
+            port = int(self.port_var.get().strip())
+        except ValueError:
+            port = 0
+        if self.tls_var.get():
+            if port in (0, 1883):
+                self.port_var.set("8883")
+        elif port in (0, 8883):
+            self.port_var.set("1883")
+
+    def _tls_port_hint(self, broker: Broker) -> str | None:
+        name = broker.name or broker.host
+        if broker.tls and broker.port == 1883:
+            return (
+                f"«{name}» tiene TLS activo con puerto 1883. "
+                "Esa combinación suele fallar. Usá el puerto 8883 o desactivá TLS."
+            )
+        if not broker.tls and broker.port == 8883:
+            return (
+                f"«{name}» usa el puerto 8883 sin TLS. "
+                "Activá TLS o cambiá el puerto a 1883."
+            )
+        return None
+
+    def _confirm_tls_port(self, broker: Broker) -> bool:
+        hint = self._tls_port_hint(broker)
+        if hint is None:
+            return True
+        return messagebox.askyesno("Radar MQTT", f"{hint}\n\n¿Intentar de todos modos?")
+
+    def _publisher_ready(self, broker: Broker) -> bool:
+        client = self._publish_client
+        return (
+            client is not None
+            and client.is_connected()
+            and self._publish_broker_key == broker.id
+            and self._publish_sig == self._broker_publish_sig(broker)
+        )
+
+    def _broker_publish_sig(self, broker: Broker) -> tuple:
+        client_id = broker.client_id.strip() or "radar"
+        return (broker.host.strip(), int(broker.port), broker.username, broker.password, bool(broker.tls), client_id)
+
+    def _arm_publisher_worker(self, broker: Broker) -> None:
+        try:
+            self._ensure_publisher(broker)
+        except Exception as error:
+            detail = self._publish_error_text(error)
+            hint = self._tls_port_hint(broker)
+            if hint and "TLS" not in detail:
+                detail = hint
+            self.events.put(("publish_failed", detail))
+            self._close_publisher(broker.id)
+
+    def _ensure_publisher(self, broker: Broker) -> mqtt.Client:
+        signature = self._broker_publish_sig(broker)
+        publish_id = f"{signature[5]}-pub"
+        stale: mqtt.Client | None = None
+        with self._publish_lock:
+            current = self._publish_client
+            same = (
+                current is not None
+                and self._publish_broker_key == broker.id
+                and self._publish_sig == signature
+            )
+            if same:
+                client = current
+            else:
+                stale = current
+                client = self._build_client(broker, client_id=publish_id, listen=False)
+                self._publish_generation += 1
+                self._publish_was_connected = False
+                client.user_data_set(self._publish_generation)
+                self._publish_client = client
+                self._publish_broker_key = broker.id
+                self._publish_sig = signature
+                self._publish_broker_name = broker.name or broker.host
+                self._publish_failure = None
+                self._publish_connected.clear()
+                self.events.put(("publish_link", "connecting", self._publish_broker_name))
+            generation = self._publish_generation
+        if client is None:
+            raise TimeoutError("No se pudo preparar la conexión de envío.")
+        if stale is not None:
+            self._stop_mqtt_client(stale)
+        if not same:
+            try:
+                client.connect_async(broker.host, int(broker.port), keepalive=60)
+                client.loop_start()
+            except Exception as error:
+                self._close_publisher(broker.id)
+                detail = str(error).strip() or "No se pudo conectar al broker."
+                raise ConnectionError(detail) from error
+        elif not client.is_connected():
+            self.events.put(("publish_link", "connecting", self._publish_broker_name))
+        if client.is_connected():
+            return client
+        deadline = time.monotonic() + 10
+        while not client.is_connected():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            signaled = self._publish_connected.wait(timeout=min(remaining, 0.25))
+            if signaled and not client.is_connected():
+                self._publish_connected.clear()
+        if client.is_connected():
+            return client
+        detail = self._publish_failure or self._tls_port_hint(broker) or "No hubo respuesta del broker."
+        if generation == self._publish_generation:
+            self._close_publisher(broker.id)
+        raise TimeoutError(detail)
+
+    def _on_publish_connect(
+        self,
+        _client: mqtt.Client,
+        userdata: object,
+        _flags: object,
+        reason_code: object,
+        _properties: object,
+    ) -> None:
+        if userdata != self._publish_generation:
+            return
+        failed = getattr(reason_code, "is_failure", reason_code not in (0, "Success"))
+        if failed:
+            self._publish_failure = f"El broker rechazó la conexión ({reason_code})"
+            self._publish_connected.clear()
+            self.events.put(("publish_link", "reconnecting", self._publish_broker_name))
+            return
+        self._publish_failure = None
+        self._publish_was_connected = True
+        self._publish_connected.set()
+        self.events.put(("publish_link", "connected", self._publish_broker_name))
+
+    def _on_publish_connect_fail(self, _client: mqtt.Client, userdata: object) -> None:
+        if userdata != self._publish_generation:
+            return
+        broker = self._broker_by_id(self._publish_broker_key)
+        if not self._publish_failure:
+            hint = self._tls_port_hint(broker) if broker is not None else None
+            if hint:
+                self._publish_failure = hint
+            elif broker is not None and broker.tls:
+                self._publish_failure = "Falló la conexión TLS. Revisá el puerto (suele ser 8883)."
+            else:
+                self._publish_failure = "No se pudo conectar al broker."
+        self._publish_connected.clear()
+        self.events.put(("publish_link", "reconnecting", self._publish_broker_name))
+
+    def _on_publish_disconnect(
+        self,
+        _client: mqtt.Client,
+        userdata: object,
+        _flags: object,
+        reason_code: object,
+        _properties: object,
+    ) -> None:
+        if userdata != self._publish_generation:
+            return
+        self._publish_connected.clear()
+        reason = str(reason_code)
+        if reason in {"0", "Normal disconnection", "Success"}:
+            self._publish_was_connected = False
+            self.events.put(("publish_link", "idle", ""))
+            return
+        was_connected = self._publish_was_connected
+        self._publish_was_connected = False
+        self.events.put(("publish_link", "reconnecting", self._publish_broker_name))
+        if was_connected:
+            self.events.put(("broker_error", self._publish_broker_name, "Se cortó la conexión de envío. Reintentando…"))
+
+    def _stop_mqtt_client(self, client: mqtt.Client) -> None:
+        try:
+            client.disconnect()
+            client.loop_stop()
+        except Exception:
+            return
+
+    def _close_publisher(self, broker_id: str | None = None) -> None:
+        with self._publish_lock:
+            if broker_id is not None and self._publish_broker_key != broker_id:
+                return
+            client = self._publish_client
+            self._publish_client = None
+            self._publish_broker_key = ""
+            self._publish_sig = ()
+            self._publish_generation += 1
+            self._publish_failure = None
+            self._publish_was_connected = False
+            self._publish_connected.clear()
+        if client is not None:
+            self._stop_mqtt_client(client)
+        self.events.put(("publish_link", "idle", ""))
+
+    def _drop_publisher_if_changed(self, broker: Broker) -> None:
+        if self._publishing:
+            return
+        signature = self._broker_publish_sig(broker)
+        with self._publish_lock:
+            if self._publish_client is None or self._publish_broker_key != broker.id:
+                return
+            self._publish_broker_name = broker.name or broker.host
+            if self._publish_sig == signature:
+                if self._publish_link_state == "connected":
+                    self.events.put(("publish_link", "connected", self._publish_broker_name))
+                return
+            client = self._publish_client
+            self._publish_client = None
+            self._publish_broker_key = ""
+            self._publish_sig = ()
+            self._publish_generation += 1
+            self._publish_failure = None
+            self._publish_was_connected = False
+            self._publish_connected.clear()
+        if client is not None:
+            self._stop_mqtt_client(client)
+        self.events.put(("publish_link", "idle", ""))
+
+    def _publish(self, broker: Broker, topic: str, payload: str, qos: int, retain: bool) -> None:
+        try:
+            client = self._publish_client
+            if (
+                client is None
+                or not client.is_connected()
+                or self._publish_broker_key != broker.id
+                or self._publish_sig != self._broker_publish_sig(broker)
+            ):
+                self.events.put(("publish_failed", "No hay conexión con el broker."))
+                return
             info = client.publish(topic, payload.encode("utf-8"), qos=qos, retain=retain)
             info.wait_for_publish(timeout=10)
             if not info.is_published():
@@ -1154,15 +1460,15 @@ class RadarApp:
                 return
             self.events.put(("published", broker.name, topic, retain))
         except Exception as error:
-            detail = str(error).strip() or error.__class__.__name__
-            self.events.put(("publish_failed", detail))
+            self.events.put(("publish_failed", self._publish_error_text(error)))
         finally:
-            try:
-                client.loop_stop()
-                client.disconnect()
-            except Exception:
-                pass
             self.events.put(("publish_done",))
+
+    def _publish_error_text(self, error: Exception) -> str:
+        text = str(error).strip()
+        if "not currently connected" in text:
+            return "No hay conexión con el broker."
+        return text or error.__class__.__name__
 
     def _fit_topics(self, _event: object = None) -> None:
         self.topics_canvas.configure(scrollregion=self.topics_canvas.bbox("all"))
@@ -1471,6 +1777,7 @@ class RadarApp:
         self.settings.selected_broker_id = broker.id
         save_settings(self.settings)
         self._refresh_brokers()
+        self._drop_publisher_if_changed(broker)
 
     def export_settings(self) -> None:
         try:
@@ -1515,6 +1822,7 @@ class RadarApp:
             return
         if self.listening:
             self.stop_listen()
+        self._close_publisher()
         self.settings = settings
         save_settings(self.settings)
         self._publish_broker_id = settings.selected_broker_id
@@ -1542,6 +1850,7 @@ class RadarApp:
             return
         if not messagebox.askyesno("Radar MQTT", f"¿Eliminar el broker «{current.name}»?"):
             return
+        self._close_publisher(current.id)
         self.settings.brokers = [broker for broker in self.settings.brokers if broker.id != current.id]
         self.settings.selected_broker_id = self.settings.brokers[0].id if self.settings.brokers else ""
         save_settings(self.settings)
@@ -1582,6 +1891,9 @@ class RadarApp:
             self._show_tab("escuchar")
             messagebox.showwarning("Radar MQTT", "Marcá al menos un broker en Escuchar, con un tópico activo.")
             return
+        for item, _topics in chosen:
+            if not self._confirm_tls_port(item):
+                return
         self._sessions = {
             item.id: _ListenSession(item.id, item.name or item.host, topics, item.qos)
             for item, topics in chosen
@@ -1598,6 +1910,9 @@ class RadarApp:
         names = ", ".join(item.name or item.host for item, _topics in chosen)
         self._log(f"Conectando a {names}", "info")
         for item, _topics in chosen:
+            hint = self._tls_port_hint(item)
+            if hint:
+                self._log(hint, "error")
             threading.Thread(target=self._connect, args=(item,), daemon=True).start()
 
     def _connect(self, broker: Broker) -> None:
@@ -1623,7 +1938,7 @@ class RadarApp:
             client_id=chosen,
             userdata=broker.id if listen else None,
             protocol=mqtt.MQTTv311,
-            reconnect_on_failure=listen,
+            reconnect_on_failure=True,
         )
         client.reconnect_delay_set(1, 20)
         if broker.username:
@@ -1632,9 +1947,14 @@ class RadarApp:
             client.tls_set()
         if listen:
             client.on_connect = self._on_connect
+            client.on_connect_fail = self._on_listen_connect_fail
             client.on_subscribe = self._on_subscribe
             client.on_message = self._on_message
             client.on_disconnect = self._on_disconnect
+        else:
+            client.on_connect = self._on_publish_connect
+            client.on_connect_fail = self._on_publish_connect_fail
+            client.on_disconnect = self._on_publish_disconnect
         return client
 
     def _session(self, userdata: object) -> _ListenSession | None:
@@ -1656,6 +1976,20 @@ class RadarApp:
             self._subscribe_next(client, session)
         except Exception as error:
             self.events.put(("broker_error", session.broker_name, str(error)))
+
+    def _on_listen_connect_fail(self, _client: mqtt.Client, userdata: object) -> None:
+        session = self._session(userdata)
+        if session is None:
+            return
+        broker = self._broker_by_id(session.broker_id)
+        detail = "No se pudo conectar al broker."
+        if broker is not None:
+            hint = self._tls_port_hint(broker)
+            if hint:
+                detail = hint
+            elif broker.tls:
+                detail = "Falló la conexión TLS. Revisá el puerto (suele ser 8883) y el certificado."
+        self.events.put(("failed", session.broker_id, session.broker_name, detail))
 
     def _subscribe_next(self, client: mqtt.Client, session: _ListenSession) -> None:
         if self._user_stop or session.broker_id not in self._sessions:
@@ -1795,6 +2129,8 @@ class RadarApp:
         elif kind == "publish_done":
             self._publishing = False
             self.publish_button.configure(state="normal", text="Publicar")
+        elif kind == "publish_link":
+            self._set_publish_link(event[1], event[2] if len(event) > 2 else "")
 
     def _stop_after_listeners_ended(self) -> None:
         self._user_stop = True
@@ -1870,6 +2206,52 @@ class RadarApp:
     def _set_status(self, text: str, role: str) -> None:
         self._status_role = role
         self.status_label.configure(text=text, fg=getattr(self.theme, role))
+
+    def _set_publish_link(self, state: str, name: str = "") -> None:
+        self._publish_link_state = state
+        self._publish_link_name = name
+        label = getattr(self, "publish_link_label", None)
+        button = getattr(self, "publish_connect_button", None)
+        theme = self.theme
+        if state == "connected":
+            text, color = f"Conectado · {name}", theme.ok
+            active = True
+        elif state == "connecting":
+            text, color = f"Conectando · {name}", theme.warn
+            active = True
+        elif state == "reconnecting":
+            text, color = f"Reconectando · {name}", theme.warn
+            active = True
+        else:
+            text, color = "Sin conexión de envío", theme.muted
+            active = False
+        if label is not None and label.winfo_exists():
+            label.configure(text=text, fg=color)
+        if button is not None and button.winfo_exists():
+            if active:
+                button.configure(
+                    text="Desconectar",
+                    bg=theme.stop,
+                    fg="white",
+                    activebackground=theme.stop_dark,
+                    activeforeground="white",
+                    highlightbackground=theme.stop_dark,
+                    highlightcolor=theme.stop_dark,
+                )
+            else:
+                button.configure(
+                    text="Conectar",
+                    bg=theme.button,
+                    fg=theme.on_button,
+                    activebackground=theme.button_dark,
+                    activeforeground=theme.on_button,
+                    highlightbackground=theme.line,
+                    highlightcolor=theme.line,
+                )
+        menu = getattr(self, "_publish_menu", None)
+        index = getattr(self, "_publish_connect_menu_index", None)
+        if menu is not None and index is not None:
+            menu.entryconfigure(index, label="Desconectar envío" if active else "Conectar envío")
 
     def _notice(self, text: str) -> None:
         self.notice_label.configure(text=text)
@@ -2256,6 +2638,7 @@ class RadarApp:
         self._user_stop = True
         self.listening = False
         self._shutdown_all()
+        self._close_publisher()
         self.inbox.close()
         try:
             broker = self.read_form()
